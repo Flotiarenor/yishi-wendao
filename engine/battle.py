@@ -1,8 +1,8 @@
-"""回合制战斗（P2/P3）：纯逻辑状态机，不碰 I/O、不 import cli。
+"""回合制战斗（P2/P3/P3.8）：纯逻辑状态机，不碰 I/O、不 import cli。
 
 架构要点：战斗是"多回合会话"，与 game.step 的"单动作"模型分离——
   - Battle 持有双方当前 HP/灵气，与 game 共享同一个 rng（随机流一致、可回溯）。
-  - 每回合：玩家动作结算 →（敌存活则）敌人行动 → 检查胜负结束。
+  - 每回合：玩家动作结算 →（敌存活则）敌人行动 → 检查胜负结束 → 回合末效果袋 tick。
   - 胜/负/逃的资源结算（掉落、重伤代价、熟悉度成长）由 game 层负责，battle 只裁决战斗本身。
 
 动作集：attack 平砍 / skill <技能> / defend 防御 / flee 遁走 / gather 聚气。
@@ -10,13 +10,15 @@
   KE = {金克木, 木克土, 土克水, 水克火, 火克金}；
   技能五行 克 目标五行 ×1.5；被目标五行 克 ×0.5；同/无 ×1.0。
 
-P3 utility 最小战斗效果（由技能数据 utility_effect 驱动）：
-  breath 吐纳：施放立即回灵（≈3×qi_regen，封顶 qi_max）；
-  root   定身：敌方本回合行动跳过；
-  weaken 破势：敌方本回合造成伤害 ×0.5；
-  evade  御风：敌方本回合攻击 50% 概率落空（消耗随机流）。
-效果标记只存在一回合（敌方行动结算后由下一回合重置）。
-defense 类技能 = 本回合受创减半（与"防御"动作等效，不差异化）。
+P3.8 效果管线（组件化最小核心，行为零漂移；规格见 docs/技能与效果架构.md §四）：
+  - 状态效果 = 效果袋中的 EffectInstance（duration>0），回合末 tick 清理，不泄漏下一回合；
+  - 立即效果（duration=0，如 breath）走 APPLY_FX 当场结算，不入袋；
+  - skill 带 effect_key → 按模板施加：tags 含 debuff/control 进敌袋，其余进自身袋；
+  - skill(defense)/defend → 施加 guard（防御类技能数据不变，等价于 guard）；
+  - 敌行动：root 跳过 → evade 概率落空 → 基础伤害 resolve_damage → weaken/guard ×0.5；
+  - 伤害公式统一走 engine.effects.resolve_damage（无修饰器时与 P2/P3 现状逐位一致）。
+  - 新效果/新修饰器 = 只加数据/注册函数，不改结算代码。
+  - 兼容：guard/enemy_rooted/enemy_weakened/self_evading 为只读 property（派生自效果袋，deprecated）。
 """
 
 # 五行"克"环：键 克 值
@@ -34,10 +36,11 @@ R_UNKNOWN_SKILL = "unknown_skill"
 R_SKILL_NA = "skill_na"
 R_LOW_QI = "low_qi"
 
-# utility 效果键 → 展示名（CLI/技能列表用）
-UTIL_EFFECT_LABELS = {
-    "breath": "吐纳", "root": "定身", "weaken": "破势", "evade": "闪避",
-}
+from content.effects import EFFECT_LABELS as _FX_LABELS
+from engine import effects as EFF
+
+# utility 效果键 → 展示名（CLI/技能列表用；由 content.effects 模板 name 生成，含 guard）
+UTIL_EFFECT_LABELS = dict(_FX_LABELS)
 
 # 可输入动作的规范化别名（CLI 层再映射到 canonical，engine 层兜底一份）
 _ACTION_ALIASES = {
@@ -97,6 +100,9 @@ class Battle:
                      已按 P3 池规则过滤：free 术法 + 运转池功法已解锁且谱系满足者）
       enemy        : content.enemies.Enemy 实体
       rng          : 复用 Game 的 Rng（保证随机流一致可回溯）
+
+    P3.8：双方效果袋 p_bag / e_bag 替代旧四 flag；guard/enemy_rooted/enemy_weakened/
+    self_evading 为只读兼容 property（派生自效果袋）。
     """
 
     def __init__(self, player_stats: dict, player_skills: list, enemy, rng):
@@ -122,12 +128,11 @@ class Battle:
         self.turn = 0
         self.ended = False       # 战斗是否已结束
         self.outcome = None      # win / lose / fled
-        self.guard = False       # 本回合玩家处于防御（受创减半）
-        # ---- P3：战斗成长与 utility 效果 ----
+        # ---- P3.8：效果袋（挂在双方身上；回合末 tick 清理，不入存档）----
+        self.p_bag = EFF.EffectBag()   # 玩家袋：guard/evade 等
+        self.e_bag = EFF.EffectBag()   # 敌袋：root/weaken 等
+        # ---- P3：战斗成长 ----
         self.used = set()        # 本场玩家成功施放的技能 id（结算时按母功法加熟悉度）
-        self.enemy_rooted = False    # 敌方本回合被定身（行动跳过）
-        self.enemy_weakened = False  # 敌方本回合伤害 ×0.5
-        self.self_evading = False    # 敌方本回合攻击 50% 落空
         self.last_reason = ""    # 最近一次 do() 的无效指令原因码（空=指令有效）
 
     # ---------- 只读视图 / 技能 ----------
@@ -151,9 +156,34 @@ class Battle:
         return (f"（你 HP {self.p_hp}/{self.p_hp_max} 灵气 {self.p_qi}/{self.p_qi_max}"
                 f" ｜ 敌 HP {self.e_hp}/{self.enemy.hp}）")
 
+    def effects_data(self) -> dict:
+        """双方效果列表（供战报/前端；EffectInstance.to_dict()）。"""
+        return {"player": self.p_bag.to_list(), "enemy": self.e_bag.to_list()}
+
+    # ---------- 兼容只读 property（deprecated：旧四 flag → 派生自效果袋） ----------
+    @property
+    def guard(self) -> bool:
+        """玩家袋含 guard 效果（本回合受创减半）。deprecated 兼容，勿再赋值。"""
+        return self.p_bag.has("guard")
+
+    @property
+    def enemy_rooted(self) -> bool:
+        """敌袋含 root 效果（本回合行动跳过）。deprecated 兼容，勿再赋值。"""
+        return self.e_bag.has("root")
+
+    @property
+    def enemy_weakened(self) -> bool:
+        """敌袋含 weaken 效果（本回合伤害 ×0.5）。deprecated 兼容，勿再赋值。"""
+        return self.e_bag.has("weaken")
+
+    @property
+    def self_evading(self) -> bool:
+        """玩家袋含 evade 效果（本回合敌攻概率落空）。deprecated 兼容，勿再赋值。"""
+        return self.p_bag.has("evade")
+
     # ---------- 主入口：每回合一步 ----------
     def do(self, action: str, skill_id=None):
-        """执行一回合：玩家动作结算 →（敌存活则）敌人行动 → 检查结束。
+        """执行一回合：玩家动作结算 →（敌存活则）敌人行动 → 检查结束 → 回合末 tick。
 
         返回 (文本, ended, outcome)：ended=False 战斗继续；outcome 仅 ended=True 时有值。
         资源不足/未知动作等"无效指令"不推进回合（玩家可重输），原因码写入 self.last_reason。
@@ -172,7 +202,7 @@ class Battle:
             if sk is None:
                 self.last_reason = R_UNKNOWN_SKILL
                 return f"没有可用技能「{skill_id}」（技能列表见菜单）。", False, None
-            if sk.kind == "utility" and not sk.utility_effect:
+            if sk.kind == "utility" and not sk.effect_key:
                 self.last_reason = R_SKILL_NA
                 return f"【{sk.name}】暂无实战效果，暂无法施展。", False, None
             if self.p_qi < sk.qi_cost:
@@ -187,29 +217,29 @@ class Battle:
         if gain > 0:
             self.p_qi += gain
             lines.append(f"（灵气自动回复 +{gain}，当前 {self.p_qi}/{self.p_qi_max}）")
-        # utility 效果标记只存在一回合：每回合初重置
-        self.guard = False
-        self.enemy_rooted = False
-        self.enemy_weakened = False
-        self.self_evading = False
 
         if act == "attack":
-            dmg = max(1, round((self.p_attack - self.enemy.defense * 0.4)
-                               * _jitter(self._rng, "bat_atk")))
+            dmg = EFF.resolve_damage(EFF.DamageCtx(
+                attack=self.p_attack, attack_ratio=1.0,
+                defense=self.enemy.defense, defense_ratio=0.4,
+                jitter=_jitter(self._rng, "bat_atk")))
             self.e_hp -= dmg
             lines.append(f"你欺身强攻【{self.enemy.name}】，造成 {dmg} 点伤害。")
         elif act == "skill":
             self.p_qi -= sk.qi_cost
             self.used.add(sk.id)   # 成功施放（已扣灵气）→ 记入战斗成长
             if sk.kind == "defense":
-                self.guard = True
+                self.p_bag.apply("guard")
                 lines.append(f"你催动【{sk.name}】护体，本回合所受伤害减半。")
             elif sk.kind == "utility":
-                self._cast_utility(sk, lines)
+                self._cast_skill_effect(sk, lines)
             else:  # attack 技能：五行克制生效
                 mult = ke_mult(sk.element, self.enemy.element)
-                base = sk.power + self.p_attack * 0.5 - self.enemy.defense * 0.3
-                dmg = max(1, round(base * mult * _jitter(self._rng, "bat_skill")))
+                dmg = EFF.resolve_damage(EFF.DamageCtx(
+                    base=sk.power, attack=self.p_attack, attack_ratio=0.5,
+                    defense=self.enemy.defense, defense_ratio=0.3,
+                    element_mult=mult, jitter=_jitter(self._rng, "bat_skill"),
+                    modifiers=dict(sk.modifiers)))
                 self.e_hp -= dmg
                 tag = ""
                 if mult > 1.0:
@@ -217,8 +247,11 @@ class Battle:
                 elif mult < 1.0:
                     tag = f"（被{self.enemy.element}所克，威力×{mult:g}）"
                 lines.append(f"你施展【{sk.name}】{tag}，造成 {dmg} 点伤害。")
+            if sk.effect_key and sk.kind != "utility":
+                # 攻/防技能也可带效果键（P3.8 数据扩展；现状数据均无 → 行为零漂移）
+                self._cast_skill_effect(sk, lines)
         elif act == "defend":
-            self.guard = True
+            self.p_bag.apply("guard")
             lines.append("你凝神防御，本回合所受伤害减半。")
         elif act == "gather":
             got = min(3 * self.p_qi_regen, self.p_qi_max - self.p_qi)
@@ -247,45 +280,77 @@ class Battle:
                 self.ended = True
                 self.outcome = BATTLE_LOSE
                 lines.append("你伤势过重，眼前一黑，轰然倒下……")
+        # ---- 回合末：效果袋 tick（duration-1、到期移除；本回合效果不泄漏下一回合）----
+        self.p_bag.tick()
+        self.e_bag.tick()
         lines.append(self._hp_line())
         return "\n".join(lines), self.ended, self.outcome
 
-    # ---------- P3：utility 效果与敌方行动 ----
-    def _cast_utility(self, sk, lines: list):
-        """施放 utility 技能：立即效果（breath）或本回合标记（root/weaken/evade）。"""
-        fx = sk.utility_effect
-        if fx == "breath":
-            got = min(3 * self.p_qi_regen, self.p_qi_max - self.p_qi)
-            self.p_qi += got
-            lines.append(f"你施展【{sk.name}】吐纳调息，灵气 +{got}"
-                         f"（当前 {self.p_qi}/{self.p_qi_max}）。")
-        elif fx == "root":
-            self.enemy_rooted = True
+    # ---------- P3.8：效果管线（施加/立即结算） ----------
+    def _cast_skill_effect(self, sk, lines: list):
+        """技能 effect_key → 模板化施加（替代旧 _cast_utility 的 if-elif）：
+
+        duration==0 → APPLY_FX 立即结算（不入袋）；duration>0 → 按模板 tags 入袋
+        （含 debuff/control 进敌袋，其余进自身袋）。叙事：内置键逐字沿用旧文案，
+        新模板键生成通用行（渲染层，不影响判定）。
+        """
+        tpl = EFF.template_by_key(sk.effect_key)
+        if tpl is None:
+            return   # 未知效果键：数据层兜底（不推进标记、不报错，战斗照常进行）
+        if tpl.duration == 0:
+            self._apply_instant(sk, tpl, lines)
+            return
+        bag = self.e_bag if ("debuff" in tpl.tags or "control" in tpl.tags) else self.p_bag
+        if bag.apply(tpl.key, source="player") is None:
+            return   # 兜底（apply 内部不入袋情形）
+        key = tpl.key
+        if key == "root":
             lines.append(f"你施展【{sk.name}】缚住【{self.enemy.name}】，其本回合动弹不得！")
-        elif fx == "weaken":
-            self.enemy_weakened = True
+        elif key == "weaken":
             lines.append(f"你施展【{sk.name}】破其攻势，【{self.enemy.name}】本回合伤害减半！")
-        elif fx == "evade":
-            self.self_evading = True
+        elif key == "evade":
             lines.append(f"你施展【{sk.name}】，身形飘忽——本回合敌攻五成落空！")
-        # 未知效果键：数据层兜底（不推进任何标记，战斗照常进行）
+        elif key == "guard":
+            lines.append(f"你施展【{sk.name}】护体，本回合所受伤害减半。")
+        else:
+            lines.append(f"你施展【{sk.name}】施加【{tpl.name}】状态。")
+
+    def _apply_instant(self, sk, tpl, lines: list):
+        """duration==0：调 APPLY_FX 立即结算（fn 修改 ctx 状态并返回文本行）。"""
+        fn = EFF.APPLY_FX.get(tpl.apply_key)
+        if fn is None:
+            return   # 未注册结算函数：数据层兜底
+        inst = EFF.EffectInstance(key=tpl.key, source="player", stacks=1,
+                                  duration=0, params=dict(tpl.params))
+        out = fn(self, inst) or []
+        if tpl.key == "breath" and out:
+            # 吐纳：旧文案逐字（handler 行 = "灵气 +N（当前 a/b）。"）
+            lines.append(f"你施展【{sk.name}】吐纳调息，{out[0]}")
+        else:
+            for gl in out:
+                lines.append(f"你施展【{sk.name}】{tpl.name}，{gl}")
 
     def _enemy_act(self, lines: list):
-        """敌方本回合行动：按 root/evade/weaken/guard 结算。"""
-        if self.enemy_rooted:
+        """敌方本回合行动：root（跳过）/ evade（落空分支）/ 基础伤害 + weaken/guard 减伤。"""
+        if self.e_bag.has("root"):
             lines.append(f"【{self.enemy.name}】被缚，动弹不得！")
             return
-        if self.self_evading and self._rng.chance(0.5, "bat_evade"):
+        ev = self.p_bag.get("evade")
+        if ev is not None and self._rng.chance(ev.params.get("chance", 0.5), "bat_evade"):
             lines.append(f"【{self.enemy.name}】扑击落空——你身形飘忽，堪堪避开！")
             return
-        dmg = max(1, round((self.enemy.attack * 0.6 - self.p_defense * 0.3)
-                           * _jitter(self._rng, "bat_edmg")))
+        dmg = EFF.resolve_damage(EFF.DamageCtx(
+            attack=self.enemy.attack, attack_ratio=0.6,
+            defense=self.p_defense, defense_ratio=0.3,
+            jitter=_jitter(self._rng, "bat_edmg")))
         notes = []
-        if self.enemy_weakened:
-            dmg = max(1, round(dmg * 0.5))
+        wk = self.e_bag.get("weaken")
+        if wk is not None:
+            dmg = max(1, round(dmg * wk.params.get("mult", 0.5)))
             notes.append("破势削其锋芒")
-        if self.guard:
-            dmg = max(1, round(dmg * 0.5))
+        gd = self.p_bag.get("guard")
+        if gd is not None:
+            dmg = max(1, round(dmg * gd.params.get("mult", 0.5)))
             notes.append("防御卸去大半")
         self.p_hp -= dmg
         if notes:

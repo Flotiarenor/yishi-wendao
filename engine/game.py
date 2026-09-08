@@ -275,7 +275,7 @@ def combat_skills(p: Player) -> list:
     """P3 战斗技能池（重写 P2 的 _battle_skill_pool）：
 
     1) free 独立术法：恒入池（unlock_fam=0）；kind ∈ attack/defense，
-       或 utility 且 utility_effect 非空；
+       或 utility 且 effect_key 非空；
     2) 运转池功法（主修 → 战斗槽 → 身法槽，去重）逐本：
        若 realm < tier 或 familiarity < FAM_ENTRY：跳过（保险，正常不会在池）；
        对本功法 skill_ids 每个技能：
@@ -290,7 +290,7 @@ def combat_skills(p: Player) -> list:
     # 1) free 独立术法
     for sk in SK.SKILLS.values():
         if sk.requirement == "free":
-            if sk.kind in ("attack", "defense") or (sk.kind == "utility" and sk.utility_effect):
+            if sk.kind in ("attack", "defense") or (sk.kind == "utility" and sk.effect_key):
                 out[sk.id] = sk
     # 2) 运转池功法
     for gid in _pool_gongfas(p):
@@ -306,7 +306,7 @@ def combat_skills(p: Player) -> list:
                 continue
             if fam < sk.unlock_fam:
                 continue  # 未参悟解锁，不亮
-            if sk.kind == "utility" and not sk.utility_effect:
+            if sk.kind == "utility" and not sk.effect_key:
                 continue  # 无战斗效果不入池
             if sk.requirement == "gentle":
                 out[sk.id] = sk
@@ -319,8 +319,8 @@ def combat_skills(p: Player) -> list:
 def _skill_tag(sk) -> str:
     """技能展示串（utility 显示效果名，供战斗开始/菜单用）。"""
     base = f"{sk.element}·{sk.kind}"
-    if sk.kind == "utility" and sk.utility_effect:
-        fx = BTL.UTIL_EFFECT_LABELS.get(sk.utility_effect, sk.utility_effect)
+    if sk.kind == "utility" and sk.effect_key:
+        fx = BTL.UTIL_EFFECT_LABELS.get(sk.effect_key, sk.effect_key)
         base = f"{sk.element}·utility·{fx}"
     return f"{sk.name}（{base}·耗{sk.qi_cost}）"
 
@@ -331,7 +331,10 @@ def _skill_data(sk) -> dict:
         "id": sk.id, "name": sk.name, "element": sk.element, "kind": sk.kind,
         "qi_cost": sk.qi_cost, "power": sk.power,
         "requirement": sk.requirement,
-        "unlock_fam": sk.unlock_fam, "utility_effect": sk.utility_effect,
+        "unlock_fam": sk.unlock_fam,
+        "effect_key": sk.effect_key,          # P3.8 正名字段（效果模板键）
+        "utility_effect": sk.effect_key,      # 镜像别名（旧前端/兼容；值恒等）
+        "modifiers": dict(sk.modifiers),      # P3.8 修饰器键→参数
         "label": _skill_tag(sk),
     }
 
@@ -1020,8 +1023,9 @@ class Game:
             req = REQ_LABELS.get(sk["requirement"], sk["requirement"])
             lock_txt = "已参悟" if sk["lit"] else f"未解锁（需熟悉度 {sk['unlock_fam']}）"
             util_txt = ""
-            if sk["kind"] == "utility" and sk["utility_effect"]:
-                fx = BTL.UTIL_EFFECT_LABELS.get(sk["utility_effect"], sk["utility_effect"])
+            if sk["kind"] == "utility" and sk["effect_key"]:
+                # 效果展示名取自 content.effects 模板 name（经 BTL.UTIL_EFFECT_LABELS）
+                fx = BTL.UTIL_EFFECT_LABELS.get(sk["effect_key"], sk["effect_key"])
                 util_txt = f"·{fx}"
             lines.append(
                 f"・{sk['name']}（{sk['element']}·{sk['kind']}{util_txt}·{req}"
@@ -1244,6 +1248,8 @@ class Game:
             "p_qi": b.p_qi, "p_qi_max": b.p_qi_max,
             "turn": b.turn, "ended": b.ended, "outcome": b.outcome,
             "skills": [_skill_data(s) for s in b.available_skills()],
+            # P3.8：双方效果列表（前端可渲染状态图标；空袋时为 []）
+            **{f"{side}_effects": lst for side, lst in b.effects_data().items()},
         }
 
     def start_battle(self, enemy_id: int) -> Result:

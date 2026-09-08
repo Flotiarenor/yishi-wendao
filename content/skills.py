@@ -6,15 +6,19 @@
     禁止裸数字/中文名。
   - name 仅显示，可随意改名，不影响引用。
   - element：五行 "金"/"木"/"水"/"火"/"土"/"无"。
-  - kind：attack 攻击 / defense 防御 / utility 辅助（P3：utility 须有 utility_effect 才可入战斗池）。
+  - kind：attack 攻击 / defense 防御 / utility 辅助（P3.8：utility 须有 effect_key 才可入战斗池）。
   - qi_cost / power：灵气消耗与攻击基准（P2 用；非攻击技能 power=0）。
   - requirement：需求谱系 "free" 自由 / "gentle" 温和 / "strict" 严格（P3 生效）。
     free = 独立术法（无母功法依赖，恒入战斗池）；gentle = 母功法在运转池任意槽；
     strict = 母功法在主修位 或 其熟悉度达 FAM_MAX 大成。
   - unlock_fam：母功法熟悉度 ≥ 此值该技能才"亮出"（亮出 ≠ 可施放，施放还看谱系）。
-  - utility_effect：utility 技能的战斗效果键（breath/root/weaken/evade），空串 = 无效果不入战斗池。
+  - effect_key：技能效果键（P3.8 起任何 kind 可用；模板见 content/effects.py 的 EFFECTS，
+    breath/root/weaken/evade…），空串 = 无效果；utility 无效果不入战斗池。
+    防御类技能不填 effect_key——战斗中由管线按 kind=="defense" 施加等价护体。
+  - modifiers：修饰器键→参数（随 attack 技能结算，见 engine/effects.py MODIFIERS；
+    穿透 armor_pen∈[0,1] 比例 / 固定加伤 extra_dmg 数值）。
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from content.ids import CAT_SKILL, make_id
 
@@ -61,7 +65,8 @@ class Skill:
     requirement: str      # free/gentle/strict
     desc: str = ""
     unlock_fam: int = 0        # 母功法熟悉度 ≥ 此值才亮出（P3；free 技能 0 恒亮）
-    utility_effect: str = ""   # utility 技能战斗效果键 breath/root/weaken/evade（P3）
+    effect_key: str = ""       # 技能效果键（模板 key；utility 须非空才入战斗池，P3.8）
+    modifiers: dict = field(default_factory=dict)   # 修饰器键→参数（P3.8，随攻击结算）
 
 
 # ---- 技能数据 ----
@@ -79,7 +84,7 @@ _skills = [
     # 木系
     Skill(QINGTENG_CHAN, "青藤缠", "木", "utility", qi_cost=6, power=0,
           requirement="gentle", desc="藤蔓自地底涌出，缠缚困敌。",
-          unlock_fam=10, utility_effect="root"),
+          unlock_fam=10, effect_key="root"),
     Skill(QINGMU_HUICHUN, "青木回春", "木", "defense", qi_cost=8, power=0,
           requirement="gentle", desc="引木灵温养己身，愈伤续战。",
           unlock_fam=30),
@@ -96,7 +101,7 @@ _skills = [
           unlock_fam=10),
     Skill(DIXIAN_SHU, "地陷术", "土", "utility", qi_cost=5, power=0,
           requirement="gentle", desc="脚下大地塌陷，乱敌阵脚。",
-          unlock_fam=30, utility_effect="weaken"),
+          unlock_fam=30, effect_key="weaken"),
     # 金系
     Skill(RUIJIN_JIANQI, "锐金剑气", "金", "attack", qi_cost=9, power=34,
           requirement="gentle", desc="凝金气为剑气，锋锐裂石。",
@@ -110,7 +115,7 @@ _skills = [
     # 无属性
     Skill(YUFENG_SHU, "御风术", "无", "utility", qi_cost=3, power=0,
           requirement="gentle", desc="风随步起，身法轻灵如御风而行。",
-          unlock_fam=10, utility_effect="evade"),
+          unlock_fam=10, effect_key="evade"),
     Skill(LINGLI_CHONGJI, "灵力冲击", "无", "attack", qi_cost=4, power=14,
           requirement="free", desc="灵力聚于指尖凝为冲击，人人可修的基础攻伐术。"),
     Skill(HUTI_LINGGUANG, "护体灵光", "无", "defense", qi_cost=4, power=0,
@@ -118,7 +123,7 @@ _skills = [
     # P3 新增：吐纳诀技（seq16）
     Skill(TUNA_SHU, "吐纳术", "无", "utility", qi_cost=2, power=0,
           requirement="gentle", desc="吐纳调息，采天地灵气补益自身。",
-          unlock_fam=10, utility_effect="breath"),
+          unlock_fam=10, effect_key="breath"),
     # 撼岳诀（练气级战斗功法·土）两技
     Skill(ZHUIYUE_ZHANG, "坠岳掌", "土", "attack", qi_cost=7, power=28,
           requirement="gentle", desc="引地气凝于掌，如山岳倾坠般砸下。",
@@ -132,11 +137,11 @@ _skills = [
           unlock_fam=10),
     Skill(BINGFU_SHU, "冰缚术", "水", "utility", qi_cost=8, power=0,
           requirement="gentle", desc="寒气凝冰缚敌足胫，使其动弹不得。",
-          unlock_fam=30, utility_effect="root"),
+          unlock_fam=30, effect_key="root"),
     # 踏云步（筑基级身法功法·无）一技
     Skill(LINGXU_BU, "凌虚步", "无", "utility", qi_cost=6, power=0,
           requirement="gentle", desc="身若凌虚，敌攻难及。",
-          unlock_fam=10, utility_effect="evade"),
+          unlock_fam=10, effect_key="evade"),
 ]
 
 # ---- 注册表：id → Skill ----

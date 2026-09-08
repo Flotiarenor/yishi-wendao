@@ -50,6 +50,7 @@ def _run_tests(argv):
     """依次跑全部测试（子进程隔离；任一失败即非零退出）。"""
     py = sys.executable
     targets = [
+        ("效果系统单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_effects.py")]),
         ("战斗单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_battle.py")]),
         ("功法深层单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_gongfa_deep.py")]),
         ("Web 壳单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_server.py")]),

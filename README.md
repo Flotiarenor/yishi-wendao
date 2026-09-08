@@ -31,6 +31,7 @@ cd D:\project\Python\game
 - ✅ **P3** 功法深层：理解锁(看不懂只见名/层级/来历) / 参悟(cw 投天数) / 熟悉度(技能 unlock_fam 逐层亮) / 需求谱系生效(free/温和/严格) / 领悟池 vs 运转池(主修1+战斗4+身法1) / 池外不生效 / battle+shenfa 槽开放 / utility 最小战斗效果(定身/破势/闪避/吐纳) / 开局赠《吐纳诀》(参悟入门→永久+5% 道基被动) / 21 技能 12 功法 / 52+83 项单测
 - ✅ **P3.5** 动作结果结构化：`Result` 增 `ok/reason/data`（原因码 R_* 枚举）；状态/市场/详情改为「数据 + 渲染」分离；测试判定改用 reason/data（不再刮文案）；`52+89` 项单测
 - ✅ **P3.6** 最小 Web 闭环：FastAPI 服务端 + `GameSession`/`RunManager` 会话层 + `/api/new|load|step|undo|state|runs` 结构化接口 + 极简 HTML 面板（`python -m server.main` → http://127.0.0.1:8000）；`tests/test_server.py` 69 项；smoke 20 局不变（18/2、482 场）
+- ✅ **P3.8** 效果/状态系统（组件化最小核心）：效果=实体（`content/effects.py` 模板袋）+ 固定管线（`engine/battle.py`）+ 修饰器扩展点（`engine/effects.py`，`register_effect`/`register_modifier`）；四 flag → 效果袋 + 兼容只读 property；`Skill.effect_key`/`modifiers`；战报 data 含双方效果列表；`tests/test_effects.py` 61 项；52+89+69 与 smoke 20 局逐位不变
 - ⬜ **P3.7 / P4 起未做**（详见 `docs/实现路线图.md`）：正式 Vue3+Vite 前端 + pywebview 桌面壳、突破考验、五行宝光、死亡转世、人物势力、事件化、生成器、平衡标定
 
 ⚠️ **平衡说明（2026-09-09 修正）**：smoke 的通关率是**固定种子+固定策略的回归指纹**，不是平衡指标
@@ -41,11 +42,11 @@ cd D:\project\Python\game
 
 ```
 main.py    统一入口（仓库根级）：web / cli / smoke / test 四个子命令
-engine/    纯逻辑引擎（无 I/O）：game 主循环 / battle 战斗 / rng 确定性随机 / state 状态 / settings 数值
-content/   实体数据（id 编码）：ids / pills(20段) / sites(10段) / skills(30段) / gongfa(40段) / enemies(60段)
+engine/    纯逻辑引擎（无 I/O）：game 主循环 / battle 战斗 / effects 效果运行时 / rng 确定性随机 / state 状态 / settings 数值
+content/   实体数据（id 编码）：ids / effects 效果模板 / pills(20段) / sites(10段) / skills(30段) / gongfa(40段) / enemies(60段)
 cli/       终端壳：main 主程序 / savefile 存档（server 会话层复用其 I/O）
 server/    Web 壳：session 会话层(GameSession/RunManager) / app FastAPI 路由 / main 启动 / static 极简面板
-tests/     smoke 自动 bot 回归 / test_battle 战斗单测 / test_gongfa_deep 功法深层 / test_server Web 壳
+tests/     smoke 自动 bot 回归 / test_battle 战斗单测 / test_gongfa_deep 功法深层 / test_server Web 壳 / test_effects 效果系统
 docs/      见文档地图
 saves/     （运行时自动生成、已 gitignore；CLI 与 server 共用 run_<seed>.json 档）
 .git/      本地仓库（根级；.venv/saves/logs 已忽略）
@@ -63,3 +64,7 @@ saves/     （运行时自动生成、已 gitignore；CLI 与 server 共用 run_
 6. **动作结果结构化（P3.5）**：`Result.ok/reason/data` 是机器契约（原因码 `R_*`），
    `text` 只是叙事渲染；测试/前端禁止解析文案，一律看 `ok/reason/data`。
    渲染函数只消费 `_status_data()/_market_data()/_gongfa_detail_data()`。
+7. **效果=实体+固定管线+修饰器（P3.8）**：效果模板是数据实体（`content/effects.py`，新效果 =
+   `register_effect` 加模板）；结算走固定管线（`engine/battle.py` 回合内：施加→敌行动→回合末
+   tick），伤害统一 `resolve_damage`（无修饰器与旧公式逐位一致）；修饰器（`armor_pen`/`extra_dmg`
+   /`register_modifier` 追加）随攻击结算。新增内容只加数据/注册函数，不改结算代码。

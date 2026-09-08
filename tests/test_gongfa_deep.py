@@ -333,11 +333,11 @@ cost = SK.by_id(SK.TUNA_SHU).qi_cost
 expect = 2 + reg - cost + 3 * reg  # = 2+6−2+18 = 24
 check("breath：吐纳回灵=3×regen 量级", b5.p_qi == expect and f"灵气 +{3 * reg}" in t5,
       f"qi→{b5.p_qi}（期望{expect}）")
-# 无 utility_effect 的 utility 拒放（含 kind=utility 校验）
+# 无 effect_key 的 utility 拒放（含 kind=utility 校验）
 from content.ids import CAT_SKILL, make_id as _mkid
 import dataclasses
 void = dataclasses.replace(SK.by_id(SK.YUFENG_SHU), id=_mkid(CAT_SKILL, 99),
-                           name="测试·无效果技", utility_effect="")
+                           name="测试·无效果技", effect_key="")
 b6 = make_battle(EM.LINGWEN_LANG, realm=1, skills=[void], qi=100)
 t6, ended6, _ = b6.do("skill", void.id)
 check("utility 无效果 → 拒放（skill_na）不推进回合",
