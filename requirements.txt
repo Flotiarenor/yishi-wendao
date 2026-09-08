@@ -1,0 +1,4 @@
+# P3.6 最小 Web 闭环：运行时依赖（实际安装版本，2026-09-09）
+# 安装：.venv\Scripts\python.exe -m pip install -r requirements.txt
+fastapi==0.141.1
+uvicorn==0.52.4

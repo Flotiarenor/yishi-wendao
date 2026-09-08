@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>仙途 · 文字修仙</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>仙途 · 文字修仙</h1>
+  <div class="top-right">
+    <span id="run-badge" class="badge hidden"></span>
+    <span id="toast" class="toast hidden"></span>
+    <button id="btn-undo" class="btn" title="回溯到上一节点（杀戮尖塔式）">回溯</button>
+    <button id="btn-new" class="btn primary">新建一世</button>
+    <select id="sel-load" class="sel" title="读取已存在的存档"><option value="">— 读档 —</option></select>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- 左：状态面板 -->
+  <section class="card panel-status">
+    <h2>状态</h2>
+    <div id="status-body"><p class="hint">尚未开世 — 点右上「新建一世」开始仙途。</p></div>
+  </section>
+
+  <!-- 中：叙事日志流 -->
+  <section class="card panel-log">
+    <h2>叙事日志</h2>
+    <div id="log"><p class="hint">（等待开局……）</p></div>
+  </section>
+
+  <!-- 右：动作区 + 战斗面板 -->
+  <section class="card panel-right">
+    <h2>行动</h2>
+    <div id="actions-body" class="locked">
+
+      <div class="row">
+        <fieldset>
+          <legend>闭关修炼</legend>
+          <label>天数 <input type="number" id="inp-cultivate-days" min="1" max="3650" value="30" class="num"></label>
+          <label class="chk"><input type="checkbox" id="chk-pill"> 用聚灵丹</label>
+          <button id="btn-cultivate" class="btn mini">闭关</button>
+        </fieldset>
+        <fieldset>
+          <legend>参悟（功法下拉 + 天数）</legend>
+          <select id="sel-gongfa" class="sel"></select>
+          <label>天数 <input type="number" id="inp-cw-days" min="1" max="3650" value="5" class="num"></label>
+          <button id="btn-cw" class="btn mini">参悟</button>
+        </fieldset>
+      </div>
+
+      <div class="row">
+        <fieldset>
+          <legend>境界</legend>
+          <button id="btn-breakthrough" class="btn mini">突破</button>
+          <button id="btn-chronicle" class="btn mini">编年史</button>
+        </fieldset>
+        <fieldset>
+          <legend>静养</legend>
+          <label>天数 <input type="number" id="inp-age-days" min="1" max="3650" value="30" class="num"></label>
+          <button id="btn-age-pass" class="btn mini">静养</button>
+        </fieldset>
+      </div>
+
+      <div class="row">
+        <fieldset>
+          <legend>移动 / 探索（地点下拉）</legend>
+          <select id="sel-site" class="sel"></select>
+          <button id="btn-travel" class="btn mini">前往</button>
+          <button id="btn-explore" class="btn mini">探索</button>
+        </fieldset>
+        <fieldset>
+          <legend>坊市 / 书库</legend>
+          <button id="btn-market" class="btn mini">货单</button>
+          <button id="btn-book" class="btn mini">书库</button>
+          <button id="btn-pill" class="btn mini">服丹</button>
+        </fieldset>
+      </div>
+
+      <div id="market-panel" class="sub-panel hidden"></div>
+      <div id="book-panel" class="sub-panel hidden"></div>
+    </div>
+
+    <div id="battle-panel" class="sub-panel battle hidden"></div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
