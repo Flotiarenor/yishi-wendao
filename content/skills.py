@@ -80,7 +80,17 @@ class SkillSpec:
 
     @property
     def element(self) -> str:
-        return self.action.components[0].element if self.action.components else "无"
+        """展示用五行：取**首个带 element 的组件**（Damage 优先），全无则「无」。
+
+        注意：不能假设 components[0] 是 Damage —— 纯防御/辅助技能的首个组件是
+        ApplyStatus / QiGain，它们没有 element 属性（P3.7 修复：此前会让
+        `gongfa_detail` 对 12 本功法中的 7 本抛 AttributeError → HTTP 500）。
+        """
+        for c in self.action.components:
+            el = getattr(c, "element", None)
+            if el:
+                return el
+        return "无"
 
     @property
     def kind(self) -> str:

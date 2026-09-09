@@ -1,0 +1,225 @@
+/* 设计令牌：沿用 P3.6 深色仙侠配色，抽成变量统一管理 */
+:root {
+  --bg: #0f1420;
+  --panel: #1a2233;
+  --panel2: #202b40;
+  --panel3: #171f31;
+  --line: #33415e;
+  --ink: #d7e0ef;
+  --ink-dim: #8fa0bf;
+  --gold: #d8b26a;
+  --green: #6fd08c;
+  --red: #e0716f;
+  --blue: #79a9ff;
+  --purple: #b08cf0;
+  --radius: 8px;
+  --gap: 10px;
+  --font: "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif;
+  --mono: ui-monospace, Consolas, "Cascadia Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 14px;
+  overflow: hidden;
+}
+
+#app { height: 100vh; display: flex; flex-direction: column; }
+
+h1, h2, h3, h4 { margin: 0; font-weight: 600; }
+
+button { font-family: inherit; font-size: inherit; }
+
+/* ---------- 通用控件 ---------- */
+.btn {
+  background: var(--panel2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: border-color .12s, color .12s, background .12s;
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); }
+.btn:disabled { opacity: .42; cursor: not-allowed; }
+.btn.mini { padding: 3px 8px; font-size: 12px; }
+.btn.primary { background: #5b4a23; border-color: var(--gold); color: #ffe9b8; }
+.btn.danger { background: #52303a; border-color: var(--red); color: #ffc8c4; }
+.btn.ghost { background: transparent; }
+.btn.active { border-color: var(--blue); color: var(--blue); background: #1b2a4a; }
+
+.sel, input.num, input.txt {
+  background: #0d1526;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-family: inherit;
+}
+input.num { width: 78px; }
+.sel { max-width: 100%; }
+
+.dim { color: var(--ink-dim); }
+.err-text { color: var(--red); }
+.ok-text { color: var(--green); }
+.gold { color: var(--gold); }
+.mono { font-family: var(--mono); }
+.hint { color: var(--ink-dim); font-style: italic; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  overflow: auto;
+  min-height: 0;
+}
+.card > h2 {
+  font-size: 13px;
+  color: var(--gold);
+  border-bottom: 1px dashed var(--line);
+  padding-bottom: 5px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 进度条 */
+.bar {
+  background: #0b1020;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  height: 12px;
+  overflow: hidden;
+  flex: 1;
+  min-width: 40px;
+}
+.bar > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #4a6bd8, #79a9ff);
+  transition: width .18s ease-out;
+}
+.bar.hd > i { background: linear-gradient(90deg, #7c2a2e, #e0716f); }
+.bar.hp > i { background: linear-gradient(90deg, #6a2a2a, #d05f5f); }
+.bar.enemy > i { background: linear-gradient(90deg, #6a3a1a, #d08a4a); }
+.bar.qi > i { background: linear-gradient(90deg, #1f5a4a, #4fd0a8); }
+
+/* 表格 */
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { border-bottom: 1px solid var(--line); padding: 5px 6px; text-align: left; vertical-align: top; }
+th { color: var(--ink-dim); font-weight: 400; }
+tbody tr:hover { background: #1d2740; }
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: #2c3a57; border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* 覆盖层（仅战斗使用：中置便于点击） */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 9, 16, .72);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  z-index: 50;
+}
+.sheet {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .6);
+  display: flex;
+  flex-direction: column;
+  width: min(1080px, 100%);
+  max-height: calc(100vh - 36px);
+  min-height: 0;
+  overflow: hidden;
+}
+.sheet > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel2);
+}
+.sheet > header h2 { font-size: 15px; color: var(--gold); }
+.sheet > .body { padding: 12px 14px; overflow: auto; min-height: 0; }
+.sheet > footer {
+  padding: 9px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--panel3);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* 嵌入主内容区的面板（P3.7 布局：左 / 中上主内容 / 中下叙事 / 右） */
+.sheet.embedded {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  overflow: hidden;
+}
+.sheet.embedded > header {
+  padding: 0 0 6px;
+  background: transparent;
+  border-bottom: 1px dashed var(--line);
+}
+.sheet.embedded > header h2 { font-size: 13px; }
+.sheet.embedded > .body { padding: 8px 2px 2px; }
+.sheet.embedded > footer {
+  padding: 6px 0 0;
+  background: transparent;
+  border-top: 1px dashed var(--line);
+}
+
+/* toast 容器（右下角，多条并存） */
+.toasts {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 200;
+  max-width: 360px;
+}
+.toast {
+  background: #40242a;
+  color: #ffb4ac;
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+}
+.toast.ok { background: #23301f; color: #bfe8c9; border-color: var(--green); }
+.toast.info { background: #1d2a44; color: #cfe0ff; border-color: var(--blue); }
+
+/* 响应式：窄屏单列 */
+@media (max-width: 900px) {
+  body { overflow: auto; }
+  #app { height: auto; min-height: 100vh; }
+}

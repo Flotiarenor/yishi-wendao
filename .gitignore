@@ -6,6 +6,11 @@ saves/
 logs/
 *.log
 
+# ---- 前端（P3.7）----
+frontend/node_modules/
+frontend/dist/
+.npm-cache/
+
 # ---- 编辑器/系统 ----
 .vscode/
 .idea/

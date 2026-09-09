@@ -174,13 +174,17 @@ POST /api/undo  {run_id}          → checkpoint 回溯（会话内，同现逻�
 
 ## 8. 前端路线
 
-- **阶段 1（P3.6 内）**：`server/static/` 极简 HTML+JS（无构建）打通闭环：
+- **阶段 1（P3.6）**：`server/static/` 极简 HTML+JS（无构建）打通闭环：
   新局 → 状态面板 → 闭关/参悟 → 市场/购 → 探索 → 战斗按钮流。目的：验证协议、
-  让真实玩家在浏览器里试玩 P0-P3 全部系统（UI 丑没关系）。
-- **阶段 2（P3.7，后置）**：正式 Vue3+Vite+Pinia+TS 工程（`frontend/`），Bridge 层同构
-  （`window.pywebview.api` vs `fetch('/api/...')`），dist 由 FastAPI 伺服；
-  可并行 P4 玩法开发。
+  让真实玩家在浏览器里试玩 P0-P3 全部系统（UI 丑没关系）。**P3.7 起已删除**。
+- **阶段 2（P3.7，✅ 已落地）**：正式 Vue3+Vite+Pinia+TS 工程（`frontend/`），API 客户端统一
+  走 `fetch('/api/...')`（同源，无 CORS）；dist 由 FastAPI 伺服。UI 形态由用户拍板（含修订）：
+  **左状态（含切换按钮）/ 中上主内容 / 中下叙事日志（可拖拽高度）**；
+  **地图是主页面，战斗临时接管主内容区**（时间轴 + 决策窗口 + 队列），坊市/书库/编年史为临时视图；
+  **无行动栏**——闭关/参悟/突破/静养收进「修炼页」（主内容区视图）。
+  （首版把地图/坊市做成覆盖层 → 探索后看不到文字；第二版用行动抽屉 → 用户改为日常动作直接进主页面。）
 - **阶段 3**：pywebview 桌面壳（Windows 分发），复用 OmniBox `main.py` 双模式启动写法。
+  （`vite.config.ts` 已设 `base: "./"`，file:// 加载无需改动）
 
 ## 9. 里程碑与验收判据
 
@@ -200,9 +204,17 @@ POST /api/undo  {run_id}          → checkpoint 回溯（会话内，同现逻�
 - [x] 回归：`test_server.py` 69 项；CLI/smoke/tests 全部不受影响（smoke 20 局 18/2、482 场不变）
 - 验收数字：判据 10/10 过（见任务书 `docs/tasks/P3_6-Web壳.md` 验收节与 subagent 报告）
 
-### P3.7 · 正式前端（后置，可与 P4 并行）
-- [ ] frontend/ Vue3+Vite 工程 + Bridge 同构 + dist 伺服
-- [ ] 面板：状态 / 编年史 / 书库(gd) / 货单 / 战斗 / 回档
+### P3.7 · 正式前端（✅ 已完成 2026-09-09，Vue3 + Vite + Pinia + TS）
+- [x] `frontend/` Vue3+Vite+Pinia+TS 工程；`npm run build`（vue-tsc 类型检查 + vite build）→ `frontend/dist`
+- [x] FastAPI 伺服 `dist` + SPA fallback（`html=True`；`/api` 404 不被吞）；未构建时返回构建提示页
+- [x] 面板：状态 / 修炼 / 编年史 / 书库(gd) / 货单 / 战斗 / 回档；布局 = 左状态（含切换按钮）+
+      中上主内容 + 中下日志（可拖拽高度）；**无行动栏**
+- [x] 战斗**临时接管主内容区**（地图为主页面），按 `docs/战斗系统定案.md` §四：时间轴 + 决策窗口 +
+      队列（入队/执行）+ 效果列表 + 动作可用性；常用动作在上、技能折叠
+- [x] 修炼页：闭关/参悟/突破/静养（参悟选择记忆；场所限制留待 P7 客栈/洞府）
+- [x] 无 CDN / 无构建期外部依赖；离线可跑（产物 JS 114 kB / CSS 13 kB）
+- [x] 顺带修复 `SkillSpec.element`（12 本功法中 7 本 `gongfa_detail` 抛 500）；`tests/test_server.py` 79 项
+- [x] 旧 P3.6 极简面板（`server/static`）删除——其战斗字段与引擎契约不符，属误导性死代码
 - [ ] （可选）pywebview 桌面壳
 
 ## 10. 风险与取舍

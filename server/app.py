@@ -14,13 +14,33 @@ import os
 from typing import Optional
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from server.session import RunManager
 
-_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)
+# P3.7 正式前端：Vue3 构建产物（frontend/dist）。旧 P3.6 极简面板（server/static）已删除——
+# 它的数据契约与 P3.7 前端不一致（战斗面板字段全错），保留只会成为误导性的死代码。
+_DIST_DIR = os.path.join(_ROOT, "frontend", "dist")
+
+_MISSING_DIST_HTML = """<!DOCTYPE html>
+<html lang="zh"><head><meta charset="UTF-8"><title>前端未构建</title></head>
+<body style="background:#0f1420;color:#d7e0ef;font-family:sans-serif;padding:40px">
+<h1 style="color:#d8b26a">前端尚未构建</h1>
+<p>请先构建 P3.7 前端（Vue3 构建产物 frontend/dist）：</p>
+<pre style="background:#1a2233;padding:12px;border-radius:6px">cd frontend
+npm install
+npm run build</pre>
+<p>构建后刷新本页即可。<code>/api/*</code> 接口不受影响。</p>
+</body></html>"""
+
+
+def _has_dist() -> bool:
+    """frontend/dist 是否已构建（存在 index.html 即视为可用）。"""
+    return os.path.isfile(os.path.join(_DIST_DIR, "index.html"))
 
 
 def _err(status_code: int, reason: str) -> JSONResponse:
@@ -123,6 +143,14 @@ def create_app(config: dict = None) -> FastAPI:
             return _err(404, "unknown_run")
         return {"ok": True, "state": sess.state()}
 
-    # ---------- 静态（极简面板）挂载在 API 之后 ----------
-    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="static")
+    # ---------- 静态前端挂载在 API 之后 ----------
+    # 顺序要求：/api 前缀的 404 不被 SPA fallback 吞成 index.html。
+    # dist 已构建 → StaticFiles(html=True) 伺服（未命中路径回退 index.html，
+    # 兼容前端深链刷新）；未构建 → 返回一段构建提示页（API 仍完全可用）。
+    if _has_dist():
+        app.mount("/", StaticFiles(directory=_DIST_DIR, html=True), name="static")
+    else:
+        @app.get("/", include_in_schema=False)
+        def _frontend_missing():
+            return HTMLResponse(_MISSING_DIST_HTML)
     return app

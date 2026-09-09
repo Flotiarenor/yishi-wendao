@@ -17,10 +17,31 @@ cd D:\project\Python\game
 .venv\Scripts\python.exe -X utf8 -m tools.dummy            # 木桩试招（7 流派对照）
 ```
 
+### 前端构建（P3.7，Vue3）
+
+前端源码在 `frontend/`（Vue3 + Vite + Pinia + TS，**无 CDN、离线可跑**），
+构建产物 `frontend/dist` 由 FastAPI 伺服（`server/app.py`）。**首次运行或改前端后需构建**：
+
+```powershell
+cd frontend
+npm install            # 首次
+npm run build          # vue-tsc 类型检查 + vite build → dist/
+npm run e2e            # 前端 E2E 冒烟（jsdom + 自起服务端，驱动到中置战斗界面）
+# 开发模式（热更新，/api 自动代理到 127.0.0.1:8000）
+npm run dev
+```
+
+未构建时访问 `/` 会显示构建提示页（`/api/*` 不受影响）。
+
 （CLI 已于 R3.4 下线；子包 `python -m server.main` 入口保留。木桩工具见 `tools/dummy.py`。）
 
-战斗操作（Web 面板）：在**决策窗口**内把动作排入队列（`battle_submit`），
-点「执行」或排满窗口后自动执行（`battle_skip`）；窗口长度 = 敌方下次出手前的时间。
+Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书库/编年史切换按钮）/
+**中上=主内容区**（默认地图，遇敌时战斗临时接管，打完自动交还）/**中下=叙事日志**
+（可折叠、**可拖拽调整高度**，探索与战斗的文字一直可见）。**没有行动栏**——闭关/参悟/突破/静养
+都在**修炼页**（状态栏「修炼」按钮，快捷键 `C`；地图快捷键 `M`）。
+战斗中在**决策窗口**内把动作排入队列（`battle_submit`，不推进时间轴），点「执行本轮」或窗口
+排满后结算（`battle_skip`）；界面显示时间轴、双方 `next_t`、队列各动作的结束时刻、双方状态效果
+与动作可用性（不可用禁用并显示原因）。窗口长度 = 敌方下次出手前的时间。
 
 ## 当前状态（2026-09-09）
 
@@ -40,7 +61,8 @@ cd D:\project\Python\game
   基线：`test_effects` 33 + `test_hardening` 55 + `test_clock` 59 + `test_action` 53 +
   `test_battle_time` 35 + `test_gongfa_deep` 91 + `test_server` 69 = **395 项**；
   smoke 20 局 = **17 通关/3 道陨、3803 场、平均终档 22.8**
-- ⬜ **P3.7 / P4 起未做**（详见 `docs/实现路线图.md`）：Web 战斗队列 UI、正式 Vue3+Vite 前端 + pywebview 桌面壳、突破考验、五行宝光、死亡转世、人物势力、事件化、生成器、平衡标定
+- ⬜ **P3.7 / P4 起未做**（详见 `docs/实现路线图.md`）：pywebview 桌面壳、突破考验、五行宝光、死亡转世、人物势力、事件化、生成器、平衡标定
+- ✅ **P3.7** 正式前端（Vue3 + Vite + Pinia + TS，`frontend/`）：FastAPI 伺服 `frontend/dist`（SPA fallback，`/api` 404 不被吞）；布局 = **左状态（含切换按钮）/ 中上主内容（地图为主页面）/ 中下叙事日志（可拖拽高度）**，遇敌时**战斗临时接管主内容区**（时间轴 / 决策窗口 / 队列入队-执行 / 双方效果 / 动作可用性，常用动作在上、技能折叠）+ **修炼页**（闭关/参悟/突破/静养，参悟选择记忆）+ 坊市（灵石/背包/购买数量/买不起置灰）+ 书库（详情/装备/卸下）+ 编年史时间线 + 状态面板（五行亲和/业力）；旧 P3.6 极简面板删除（`server/static`）；顺带修复 `gongfa_detail` 对 7/12 功法抛 500 的 `SkillSpec.element` bug；`tests/test_server.py` 79 项 + 前端 E2E 27 项
 
 ⚠️ **平衡说明（2026-09-09 修正）**：smoke 的通关率是**固定种子+固定策略的回归指纹**，不是平衡指标
 （换 bot 策略数字就变，与游戏好不好玩无关）。数值平衡统一在 P10 用多策略采样 + 支配策略/资源曲线等
@@ -52,12 +74,13 @@ cd D:\project\Python\game
 main.py    统一入口（仓库根级）：web / smoke / test 三个子命令
 engine/    纯逻辑引擎（无 I/O）：clock 时间轴 / rules 纯函数规则 / action 动作模型 / battle 时间轴战斗 / game 主循环 / effects 效果运行时 / rng 确定性随机 / state 状态 / settings 数值
 content/   实体数据（id 编码）：ids / effects 效果模板 / actions 动作数据 / pills(20段) / sites(10段) / skills(30段) / gongfa(40段) / enemies(60段)
-server/    Web 壳：session 会话层(GameSession/RunManager) / savefile 存档 I/O / app FastAPI 路由 / main 启动 / static 极简面板
+server/    Web 壳：session 会话层(GameSession/RunManager) / savefile 存档 I/O / app FastAPI 路由（伺服 frontend/dist）/ main 启动
+frontend/  正式前端（Vue3+Vite+Pinia+TS）：src/api 客户端 / src/stores Pinia / src/views 各界面 / dist 构建产物（gitignore）
 tools/     dummy.py 木桩试招（7 流派对照 + 逐招时间轴）
 tests/     smoke 自动 bot 回归 / test_clock 时间轴 / test_action 动作 / test_battle_time 时间轴战斗 / test_effects 效果 / test_gongfa_deep 功法深层 / test_server Web 壳 / test_hardening 引擎加固
 docs/      见文档地图
 saves/     （运行时自动生成、已 gitignore；run_<seed>.json 档）
-.git/      本地仓库（根级；.venv/saves/logs 已忽略）
+.git/      本地仓库（根级；.venv/saves/logs/node_modules/dist 已忽略）
 .venv/     虚拟环境（Python 3.13）
 ```
 

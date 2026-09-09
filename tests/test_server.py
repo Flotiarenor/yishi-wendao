@@ -13,12 +13,16 @@
   H. HTTP 冒烟（stdlib urllib + 线程内 uvicorn，不新增测试依赖）
   I. 全流程（HTTP 级）：新局→参悟→装主修→货单→买锐金典→参悟→换主修→探索遇敌→战斗至结束
   J. 未知 action → unknown_action（引擎码经 step 透传）；未知 run_id → unknown_run；缺参 → bad_request
-  K. 引擎回归：子进程重跑 test_battle.py(52) / test_gongfa_deep.py(89) 均 0 退出
+  L. R3 战斗契约（HTTP 级）：battle_submit 入队不推进时间轴 / 连续入队 / battle_skip 结算
+  M. 书库详情回归：gongfa_detail 对全部功法 ok（P3.7 修 SkillSpec.element 的 500）
+  N. 静态前端：dist 伺服（资产引用 / reason 映射字面量 / 无 CDN）；未构建则返回构建提示页
+  K. 引擎回归：子进程重跑 test_battle_time.py / test_gongfa_deep.py 均 0 退出
 
 注意：所有存档走临时目录注入 save_dir，不污染真实 saves/；服务结束后关闭、无残留进程。
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from content import gongfa as G  # noqa: E402
 from engine import settings as S  # noqa: E402
 from engine.game import Game, R_OK, R_UNKNOWN_ACTION  # noqa: E402
+from server import savefile as sv  # noqa: E402
 
 _PASS = 0
 _FAIL = 0
@@ -414,17 +419,123 @@ try:
           and any(o["id"] == G.RUIJIN_DIAN and o["familiarity"] >= S.FAM_ENTRY
                   for o in final["owned"]))
 
-    # ---- 静态面板资源 ----
+    # ---- L. R3 战斗契约（HTTP 级）：入队 battle_submit → 执行 battle_skip ----
+    bq_seed = 3200
+    http.j("POST", "/api/new", {"seed": bq_seed})
+    bqid = str(bq_seed)
+
+    def bstep(action, **kw):
+        return http.j("POST", "/api/step",
+                      {"run_id": bqid, "action": action, "kwargs": kw})[1]
+
+    battle = None
+    for _ in range(60):
+        st_b = http.j("GET", "/api/state?run_id=" + bqid)[1]["state"]
+        if st_b["battle"]:
+            battle = st_b["battle"]
+            break
+        bstep("explore", site="灵脉山")
+    check("L-1 探索遇敌 → state.battle 含 R3 时间轴字段",
+          battle is not None
+          and {"t", "queue", "window_li", "enemy_next_t", "player_next_t",
+               "effects", "actions"} <= set(battle or {}),
+          f"keys={sorted((battle or {}).keys())}")
+
+    if battle:
+        t0 = battle["t"]
+        r1 = bstep("battle_submit", key="attack")
+        q = (r1 or {}).get("state", {}).get("battle", {}).get("queue", [])
+        check("L-2 battle_submit 入队且不推进时间轴",
+              r1 is not None and r1["ok"] is True and len(q) == 1
+              and r1["state"]["battle"]["t"] == t0
+              and q[0]["end_t"] > t0,
+              f"queue={q}")
+        r2 = bstep("battle_submit", key="attack")
+        q2 = (r2 or {}).get("state", {}).get("battle", {}).get("queue", [])
+        check("L-3 可连续入队（无槽位上限，队列即规划）",
+              r2 is not None and r2["ok"] is True and len(q2) >= 1
+              and (len(q2) == 1 or q2[1]["end_t"] > q2[0]["end_t"]),
+              f"queue_len={len(q2)}")
+        r3 = bstep("battle_skip")
+        st3 = (r3 or {}).get("state", {}).get("battle")
+        check("L-4 battle_skip 结算队列并推进时间轴",
+              r3 is not None and r3["ok"] is True
+              and (st3 is None or (not st3["queue"] and st3["t"] > t0)),
+              f"t={None if st3 is None else st3['t']}")
+        r4 = bstep("battle_submit", key="not_a_real_action")
+        check("L-5 未知战斗动作 → unknown_action 透传",
+              r4 is not None and r4["ok"] is False and r4["reason"] == "unknown_action")
+        # 收尾：把战斗打完，避免残留（不影响后续用例，save_dir 已隔离）
+        for _ in range(80):
+            st_b = http.j("GET", "/api/state?run_id=" + bqid)[1]["state"]
+            if not st_b["battle"]:
+                break
+            bstep("battle_action", cmd="attack")
+
+    # ---- M. 书库详情回归（P3.7 修复：12 本功法全部 ok，不再 500） ----
+    gd_seed = 3300
+    gd_dir = d_h
+    _g = Game(seed=gd_seed, name="书库")
+    _g.state.player.owned_gongfa = sorted(G.GONGFA.keys())
+    sv.write(gd_seed, _g.snapshot(), save_dir=gd_dir)
+    gdid = str(gd_seed)
+    st, d = http.j("POST", "/api/load", {"run_id": gdid})
+    check("M-0 全功法存档可载入", st == 200 and d["ok"] is True)
+
+    gd_bad = []
+    for _gid, _gf in sorted(G.GONGFA.items()):
+        st, dj = http.j("POST", "/api/step",
+                        {"run_id": gdid, "action": "gongfa_detail",
+                         "kwargs": {"gongfa": _gf.name}})
+        if st != 200 or dj.get("ok") is not True:
+            gd_bad.append((_gf.name, st, dj.get("reason")))
+    check("M-1 gongfa_detail 对全部功法 ok（防 500 回归）",
+          not gd_bad, f"失败={gd_bad}")
+
+    st, dj = http.j("POST", "/api/step",
+                    {"run_id": gdid, "action": "gongfa_detail",
+                     "kwargs": {"gongfa": "吐纳诀"}})
+    els = [s["element"] for s in dj["data"].get("skills", [])] if dj.get("ok") else []
+    check("M-2 纯辅助功法元素兜底为「无」（不再 AttributeError）",
+          st == 200 and dj["ok"] is True and els == ["无"], f"elements={els}")
+
+    st, dj = http.j("POST", "/api/step",
+                    {"run_id": gdid, "action": "gongfa_detail", "kwargs": {"gongfa": ""}})
+    check("M-3 gongfa_detail 空参数 → 返回书库列表（前端书库首屏）",
+          st == 200 and dj["ok"] is True and "library" in dj["data"]
+          and len(dj["data"]["library"]) == len(G.GONGFA))
+
+    # ---- 静态前端（P3.7：伺服 frontend/dist；未构建则返回构建提示页） ----
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    dist_dir = os.path.join(root_dir, "frontend", "dist")
+    has_dist = os.path.isfile(os.path.join(dist_dir, "index.html"))
     st, html = http.req("GET", "/")
-    keys = ["id=\"btn-new\"", "id=\"btn-undo\"", "id=\"log\"",
-            "id=\"status-body\"", "id=\"battle-panel\"", "app.js", "style.css"]
-    check("面板 / 含关键元素与脚本", st == 200 and all(k in html for k in keys))
-    st, js = http.req("GET", "/app.js")
-    check("app.js 含 REASON_TEXT 错误映射(禁解析 text)",
-          st == 200 and "REASON_TEXT" in js and "no_stones" in js
-          and "unknown_run" in js and js.count("in r.text") == 0)
-    st, css = http.req("GET", "/style.css")
-    check("style.css 可伺服", st == 200 and "layout" in css)
+    if has_dist:
+        assets = re.findall(r'(?:src|href)="\./?(assets/[^"]+)"', html)
+        check("面板 / 伺服 frontend/dist（含构建资产引用）",
+              st == 200 and 'id="app"' in html and len(assets) >= 2
+              and all(os.path.isfile(os.path.join(dist_dir, a)) for a in assets),
+              f"assets={len(assets)}")
+        js_rel = next((a for a in assets if a.endswith(".js")), None)
+        st, js = http.req("GET", "/" + js_rel) if js_rel else (0, "")
+        # 注意：生产构建会压缩标识符（REASON_TEXT 变量名可能被改），
+        # 因此断言「reason 码 + 中文提示」这类**字面量**，而不是内部变量名。
+        check("dist JS 含 reason 映射与 R3 战斗动作（禁解析 text）",
+              st == 200 and "no_stones" in js and "unknown_run" in js
+              and "灵石不足" in js and "battle_submit" in js and "battle_skip" in js
+              and "in r.text" not in js)
+        css_rel = next((a for a in assets if a.endswith(".css")), None)
+        st, css = http.req("GET", "/" + css_rel) if css_rel else (0, "")
+        check("dist CSS 可伺服（含 .layout）", st == 200 and "layout" in css)
+        check("dist 无 CDN 外部依赖（离线可跑）",
+              "http://" not in html.replace("http://www.w3.org", "")
+              and "https://" not in html)
+    else:
+        # dist 未构建：/ 返回构建提示页（API 不受影响），不是旧 P3.6 面板
+        check("dist 未构建时 / 返回构建提示页（旧 P3.6 面板已删除）",
+              st == 200 and "前端尚未构建" in html and "npm run build" in html)
+        st, _ = http.req("GET", "/health")
+        check("dist 未构建时 API 仍可用", st == 200)
     st, d = http.j("GET", "/api/nope")
     check("/api 未知 GET 不被 SPA fallback 吞成 HTML", st == 404)
 finally:
