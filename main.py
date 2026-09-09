@@ -27,7 +27,7 @@ if ROOT not in sys.path:
 
 USAGE = """仙途 · 文字修仙 —— 统一入口
 
-  python main.py                  起 Web 壳（默认，浏览器打开 http://127.0.0.1:8000）
+  python main.py                  起 Web 壳（默认，浏览器打开 http://127.0.0.1:8044）
   python main.py web [--port N]   同上（可指定端口）
   python main.py smoke [--lives N] [--log]   自动 bot 回归（记录分布与战斗统计）
   python main.py test             跑全部测试（时间轴/动作/战斗/加固/内容工具 + 冒烟）

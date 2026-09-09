@@ -217,6 +217,11 @@ print("== H/I/J HTTP 冒烟与全流程 ==")
 import uvicorn  # noqa: E402
 
 from server.app import create_app  # noqa: E402
+from server.main import parse_args as _serve_args  # noqa: E402
+
+# 启动参数：默认端口 8044（用户偏好），--port 可覆盖
+check("Web 默认端口 = 8044", _serve_args([]).port == 8044, str(_serve_args([]).port))
+check("--port 可覆盖默认端口", _serve_args(["--port", "9000"]).port == 9000)
 
 
 class _Http:

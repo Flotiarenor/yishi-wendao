@@ -1,7 +1,7 @@
 """Web 服务启动入口（P3.6 最小 Web 闭环）。
 
 运行：
-  python -m server.main [--host 127.0.0.1] [--port 8000]
+  python -m server.main [--host 127.0.0.1] [--port 8044]
 浏览器打开 http://<host>:<port> 即进入极简面板（开发期直接浏览器玩，
 阶段 2/3 的 Vue3 + pywebview 桌面壳复用同一 app 工厂）。
 
@@ -16,7 +16,7 @@ import uvicorn
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description="仙途文字修仙 · Web 壳（FastAPI）")
     ap.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
-    ap.add_argument("--port", type=int, default=8000, help="监听端口（默认 8000）")
+    ap.add_argument("--port", type=int, default=8044, help="监听端口（默认 8044）")
     return ap.parse_args(argv)
 
 
