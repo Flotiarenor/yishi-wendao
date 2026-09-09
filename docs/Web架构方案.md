@@ -196,13 +196,13 @@ POST /api/undo  {run_id}          → checkpoint 回溯（会话内，同现逻�
 - [x] 测试迁移：`test_gongfa_deep.py` 89 项、`test_battle.py` 52 项，判定改 reason/data（文案仅存渲染冒烟）
 - [x] 验收：smoke 20 局结果与重构前逐位一致（18 通关/2 道陨、482 场 481 胜/1 逃）；变异测试（改原因码）立即 2 红
 
-### P3.6 · 最小 Web 闭环（✅ 已完成 2026-09-09，subagent 实现 + 主会话独立复核通过）
+### P3.6 · 最小 Web 闭环（✅ 已完成 2026-09-09，主会话独立复核通过）
 - [x] `server/` 包：session.py（GameSession/RunManager）+ FastAPI 应用工厂 + `/health` + `/api/new|load|step|undo|state|runs`
 - [x] 依赖 fastapi 0.141.1 / uvicorn 0.52.4；`python -m server.main` 可起（打印地址后 uvicorn.run）
 - [x] 极简 HTML 面板全流程可玩（新局/闭关/参悟/换功法/市场/探索/战斗/回溯/服丹/编年史；原生 JS + REASON_TEXT 错误映射）
 - [x] 每步落盘 + 重启后续玩（RunManager 从 saves/ 恢复；familiarity int 键 JSON 往返修复）
 - [x] 回归：`test_server.py` 69 项；CLI/smoke/tests 全部不受影响（smoke 20 局 18/2、482 场不变）
-- 验收数字：判据 10/10 过（见任务书 `docs/archive/tasks/P3_6-Web壳.md` 验收节与 subagent 报告）
+- 验收数字：判据 10/10 过（见任务书 `docs/archive/tasks/P3_6-Web壳.md` 验收节）
 
 ### P3.7 · 正式前端（✅ 已完成 2026-09-09，Vue3 + Vite + Pinia + TS）
 - [x] `frontend/` Vue3+Vite+Pinia+TS 工程；`npm run build`（vue-tsc 类型检查 + vite build）→ `frontend/dist`
