@@ -110,6 +110,7 @@ _TRAIL_TOL = 0.02         # 小径判定容差 10 m
 _RIVER_W_HEAD = 0.05      # 25 m
 _RIVER_W_TAIL = 0.40      # 200 m
 _FORD_R = 0.03            # 渡口判定半径（里）= 15 m
+_FORD_SPACING_LI = 600.0  # 渡口沿河间距（里）
 
 
 def _dist_point_seg(px: float, py: float, ax: float, ay: float,
@@ -375,6 +376,18 @@ def cell_of(x: float, y: float) -> tuple:
 def center_of(cx: int, cy: int) -> tuple:
     """格心坐标（里）。"""
     return ((cx + 0.5) * _CELL_LI, (cy + 0.5) * _CELL_LI)
+
+
+def _town_xy(seed: int, cx: int, cy: int) -> tuple:
+    """城镇实际坐标 = 格心 + **确定性抖动**（±0.5 格）。
+
+    无抖动时候选格按固定步长采样 → 城镇全落在 100 里格点上，地图上排成整齐行列
+    （实测 seed 20260910：205 座城镇的 x%100、y%100 全为 25，同一条水平线最多 22 座）。
+    """
+    x, y = center_of(cx, cy)
+    jx = (hash01(seed, "townjx", cx, cy) - 0.5) * _CELL_LI
+    jy = (hash01(seed, "townjy", cx, cy) - 0.5) * _CELL_LI
+    return x + jx, y + jy
 
 
 # ============ 数据记录 ============
@@ -878,8 +891,7 @@ class WorldMap:
         for ax, ay, bx, by, w in segs:
             if _dist_point_seg(x, y, ax, ay, bx, by) <= w * 0.5:
                 for rv in self._rivers:
-                    for (fcx, fcy) in rv.fords:
-                        fx, fy = center_of(fcx, fcy)
+                    for (fx, fy) in rv.fords:
                         if (x - fx) ** 2 + (y - fy) ** 2 <= _FORD_R * _FORD_R:
                             return _T_FORD
                 return _T_WATER
@@ -1051,102 +1063,124 @@ class WorldMap:
         rivers = []
         river_cell_set = set()
         lake_budget = 30
+        _step = _CELL_LI * 0.5                       # 步长 25 里
+        _dirs = tuple((math.cos(i * math.pi / 12.0), math.sin(i * math.pi / 12.0))
+                      for i in range(24))            # 24 方向（15° 分辨率，避免"只有 45°"）
+        _lo = _CELL_LI
+        _hi = _WORLD_LI - _CELL_LI
+
+        def _elev_lerp(px: float, py: float) -> float:
+            """高程双线性插值（生成期网格）——比重采 fbm 快得多。"""
+            fx = px / _CELL_LI - 0.5
+            fy = py / _CELL_LI - 0.5
+            ix = int(math.floor(fx))
+            iy = int(math.floor(fy))
+            tx = fx - ix
+            ty = fy - iy
+            if ix < 0:
+                ix, tx = 0, 0.0
+            elif ix > n - 2:
+                ix, tx = n - 2, 1.0
+            if iy < 0:
+                iy, ty = 0, 0.0
+            elif iy > n - 2:
+                iy, ty = n - 2, 1.0
+            i00 = iy * n + ix
+            e00 = elev[i00]
+            e10 = elev[i00 + 1]
+            e01 = elev[i00 + n]
+            e11 = elev[i00 + n + 1]
+            return ((e00 * (1.0 - tx) + e10 * tx) * (1.0 - ty)
+                    + (e01 * (1.0 - tx) + e11 * tx) * ty)
+
         for sy, sx in sources:
-            path = [(sy, sx)]
-            cur = (sy, sx)
-            end = None
+            cur = ((sx + 0.5) * _CELL_LI, (sy + 0.5) * _CELL_LI)
+            pts = [cur]
+            end = cur
             reason = "capped"
-            while len(path) < 400:
-                ce = elev[cur[0] * n + cur[1]]
+            while len(pts) < 600:
+                e0 = _elev_lerp(cur[0], cur[1])
                 best = None
-                best_e = ce
-                for dy in (-1, 0, 1):
-                    nrow = (cur[0] + dy) * n
-                    for dx in (-1, 0, 1):
-                        if dx == 0 and dy == 0:
-                            continue
-                        ny, nx = cur[0] + dy, cur[1] + dx
-                        if ny < 0 or nx < 0 or ny >= n or nx >= n:
-                            continue
-                        ne = elev[nrow + nx]
-                        if ne < best_e - 1e-12:
-                            best_e = ne
-                            best = (ny, nx)
+                best_e = e0
+                for dx, dy in _dirs:
+                    nx = cur[0] + dx * _step
+                    ny = cur[1] + dy * _step
+                    if nx < _lo or ny < _lo or nx > _hi or ny > _hi:
+                        continue
+                    e = _elev_lerp(nx, ny)
+                    if e < best_e - 1e-9:
+                        best_e = e
+                        best = (nx, ny)
                 if best is None:
                     end = cur
                     reason = "sink"
                     break
-                bidx = best[0] * n + best[1]
+                cur = best
+                pts.append(cur)
+                cx, cy = cell_of(cur[0], cur[1])
+                bidx = cy * n + cx
                 tid = base[bidx]
                 if tid == _T_DEEPSEA or tid == _T_WATER or bidx in river_cell_set:
-                    end = best
+                    end = cur
                     reason = "water"
                     break
                 if tid == _T_VOID:
-                    end = best
+                    end = cur
                     reason = "edge"
                     break
-                path.append(best)
-                cur = best
             else:
                 end = cur
                 reason = "capped"
 
-            # R2b：**不再把河写进地形数组**——河流改为几何覆盖（折线 + 沿程渐变宽度）。
-            # 生成期仍需要"河流是屏障"这一语义 → 由 river_cell_set 承担（下方统一登记）。
+            # R2b：**不把河写进地形数组**——河流是几何覆盖（折线 + 沿程渐变宽度）。
+            # 生成期"河流是屏障"由 river_cell_set 承担。
             # 局部洼地 → 小湖（总湖面积 ≤ 30 格）
             if reason == "sink" and end is not None:
-                ey, ex = end
+                ex, ey = cell_of(end[0], end[1])
                 if elev[ey * n + ex] < 0.40 and lake_budget > 0:
                     blob = [(ey, ex)]
                     for dy in (-1, 0, 1):
                         for dx in (-1, 0, 1):
                             if dx == 0 and dy == 0:
                                 continue
-                            ny, nx = ey + dy, ex + dx
-                            if 0 < ny < n - 1 and 0 < nx < n - 1:
-                                blob.append((ny, nx))
-                    for cy, cx in blob:
+                            ny2, nx2 = ey + dy, ex + dx
+                            if 0 < ny2 < n - 1 and 0 < nx2 < n - 1:
+                                blob.append((ny2, nx2))
+                    for cy2, cx2 in blob:
                         if lake_budget <= 0:
                             break
-                        if base[cy * n + cx] != _T_VOID:
-                            base[cy * n + cx] = _T_WATER
+                        if base[cy2 * n + cx2] != _T_VOID:
+                            base[cy2 * n + cx2] = _T_WATER
                             lake_budget -= 1
-            if len(path) >= 5:
-                # 对外统一 (cx, cy) 坐标序，与 Road.cells / PathResult.cells 一致
-                cells = tuple((cx, cy) for cy, cx in path)
-                pts = tuple(center_of(cx, cy) for cx, cy in cells)
+            if len(pts) >= 8:
+                pts = tuple(pts)
                 length = _polyline_li(pts)
-                # R2b：河宽**沿程渐变**（源头窄 → 下游宽）
                 _m = len(pts) - 1
-                if _m > 0:
-                    widths = tuple(_RIVER_W_HEAD + (_RIVER_W_TAIL - _RIVER_W_HEAD) * (i / _m)
-                                   for i in range(len(pts)))
-                else:
-                    widths = (_RIVER_W_HEAD,)
+                widths = tuple(_RIVER_W_HEAD + (_RIVER_W_TAIL - _RIVER_W_HEAD) * (i / _m)
+                               for i in range(len(pts)))
+                cells = tuple(cell_of(px, py) for px, py in pts)
                 rivers.append([cells, pts, length, widths])
-                for cx, cy in cells:
-                    river_cell_set.add(cy * n + cx)
+                for cx2, cy2 in cells:
+                    river_cell_set.add(cy2 * n + cx2)
 
         # 渡口：每条河上按序每 ≥25 格挑一个高程最低的格；两端各留 1 格
         out = []
         for cells, pts, length, widths in rivers:
-            interior = cells[1:-1]
+            # 渡口：沿弧长每 ~600 里一个（坐标 = 河面上的点，浮点里）
             fords = []
-            for i in range(0, len(interior), 25):
-                chunk = interior[i:i + 25]
-                best = None
-                best_e = None
-                for cx, cy in chunk:
-                    e = elev[cy * n + cx]
-                    if best_e is None or e < best_e:
-                        best_e = e
-                        best = (cx, cy)
-                if best is None:
-                    best = chunk[0]
-                fords.append(best)
-                base[best[1] * n + best[0]] = _T_FORD
-                river_cell_set.add(best[1] * n + best[0])
+            _acc = 0.0
+            for _k in range(1, len(pts) - 1):
+                _acc += math.hypot(pts[_k][0] - pts[_k - 1][0],
+                                   pts[_k][1] - pts[_k - 1][1])
+                if _acc >= _FORD_SPACING_LI:
+                    fords.append(pts[_k])
+                    _acc = 0.0
+            if not fords and len(pts) >= 3:
+                fords.append(pts[len(pts) // 2])
+            for _fx, _fy in fords:
+                _fcx, _fcy = cell_of(_fx, _fy)
+                base[_fcy * n + _fcx] = _T_FORD
+                river_cell_set.add(_fcy * n + _fcx)
             out.append(River(points=pts, cells=cells, length_li=length,
                              fords=tuple(fords), widths=widths))
         self._rivers = _FeatureTuple(out)
@@ -1307,10 +1341,10 @@ class WorldMap:
                     key = (cy, cx)
                     if key in picked:
                         continue
-                    x, y = center_of(cx, cy)
+                    x, y = _town_xy(seed, cx, cy)
                     ok = True
                     for acy, acx, _ in accepted + all_towns:
-                        ax, ay = center_of(acx, acy)
+                        ax, ay = _town_xy(seed, acx, acy)
                         dx = ax - x
                         dy = ay - y
                         if dx * dx + dy * dy < gap2 - 1e-9:
@@ -1335,7 +1369,7 @@ class WorldMap:
                     if si >= len(R.TOWN_SUFFIXES):
                         si = len(R.TOWN_SUFFIXES) - 1
                     name = R.TOWN_PREFIXES[pi] + R.TOWN_SUFFIXES[si]
-                    x, y = center_of(cx, cy)
+                    x, y = _town_xy(seed, cx, cy)      # 带抖动，避免格点行列
                     if name in used_names:
                         base_name = name
                         dup = 0

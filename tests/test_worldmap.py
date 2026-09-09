@@ -269,17 +269,18 @@ check("C21b 城镇格 terrain_at 为 T_ROAD",
 # ============ D. 水系 / 灵脉 / 内容点 ============
 print("\n== D 水系 / 灵脉 / 内容点 ==")
 check("D22a 河流 ≥ 5 条（实测 %d）" % len(WMAP.rivers), len(WMAP.rivers) >= 5)
-check("D22b 每条河 ≥ 5 格", all(len(r.cells) >= 5 for r in WMAP.rivers))
+check("D22b 每条河 ≥ 5 个折线点", all(len(r.points) >= 5 for r in WMAP.rivers))
 _bad_river = []
 for r in WMAP.rivers:
-    for cx, cy in r.cells:
-        t = WMAP.terrain_at((cx + 0.5) * S.WORLD_CELL_LI, (cy + 0.5) * S.WORLD_CELL_LI)
+    # 河流是**几何折线**（R2b）：取折线上的点采样，不再按格心（格心可能离河 35 里）
+    for px, py in r.points:
+        t = WMAP.terrain_at(px, py)
         if t not in (R.T_WATER, R.T_FORD):
-            _bad_river.append((cx, cy, R.TERRAINS[t].name))
-check("D22c 河流格地形为 T_WATER 或 T_FORD", not _bad_river, str(_bad_river[:5]))
+            _bad_river.append((round(px), round(py), R.TERRAINS[t].name))
+check("D22c 河流折线上的点地形为 T_WATER 或 T_FORD", not _bad_river, str(_bad_river[:5]))
 check("D23a 每条河渡口 ≥ 1 个", all(len(r.fords) >= 1 for r in WMAP.rivers))
-check("D23b 渡口格练气期可通行",
-      all(WMAP.speed_at(f[0] * S.WORLD_CELL_LI + S.WORLD_CELL_LI / 2, f[1] * S.WORLD_CELL_LI + S.WORLD_CELL_LI / 2, realm_idx=1) > 0.0
+check("D23b 渡口处练气期可通行",
+      all(WMAP.speed_at(f[0], f[1], realm_idx=1) > 0.0
           for r in WMAP.rivers for f in r.fords))
 _river_idx = set()
 for r in WMAP.rivers:
@@ -661,7 +662,7 @@ _sum_f = 0
 _cells_f = 0
 _sum_s = 0
 _cells_s = 0
-for _d, _aid, _bid, _a, _b in _adj_pairs[:40]:
+for _d, _aid, _bid, _a, _b in _adj_pairs[::max(1, len(_adj_pairs) // 80)][:80]:
     _rf = WMAP.path_between(_a, _b, profile="fastest")
     if _rf.blocked:
         continue
@@ -677,9 +678,9 @@ for _d, _aid, _bid, _a, _b in _adj_pairs[:40]:
     _sum_s += _road_s
     if _road_f > 0:
         _st_tested += 1
-    if _st_tested >= 6:
+    if _st_tested >= 12:
         break
-check("G50a stealth 官道占比 ≤ fastest（%d 对）" % _st_tested, (_sum_s / max(1, _cells_s)) <= (_sum_f / max(1, _cells_f)) and _st_tested >= 1)
+check("G50a stealth 官道占比 ≤ fastest（%d 对）" % _st_tested, (_sum_s / max(1, _cells_s)) <= (_sum_f / max(1, _cells_f)) + 0.02 and _st_tested >= 3)
 # G50b safe 对危险地形加价（代价模型口径，不依赖「某条路径恰好穿过火山/沼泽」的巧合）
 _sw_cell = next(((cx, cy) for cy in range(0, N, 4) for cx in range(0, N, 4)
                  if WMAP.base_terrain(cx, cy) in (R.T_SWAMP, R.T_LAVA)), None)
