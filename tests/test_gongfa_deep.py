@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from content import actions as CA
 from content import enemies as EM
 from engine import rules as R
+from engine import status as STATUS
 from content import gongfa as G
 from content import pills as P
 from content import sites as ST
@@ -342,8 +343,8 @@ b = make_battle(EM.LINGWEN_LANG, realm=1, skills=[SK.by_id(SK.DIXIAN_SHU)])
 b.p.qi = 100
 cast(b, SK.DIXIAN_SHU, windows=1)
 check("weaken：破势状态进入敌方袋", b.e.has_status("weaken"))
-check("weaken：rules 攻方乘区认识该键",
-      R.STATUS_MULT.get("weaken", (None, 0))[0] == "attacker")
+check("weaken：行为表登记为攻方乘区",
+      STATUS.STATUS_RULES["weaken"].side == "attacker")
 
 # evade：闪避 → 自身袋
 b = make_battle(EM.LINGWEN_LANG, realm=1, skills=[SK.by_id(SK.YUFENG_SHU)])
@@ -570,8 +571,8 @@ md = g.step("market").data
 names = [x["name"] for x in md["gongfa"]]
 check("吐纳诀不售（market=False 不入货单）", "吐纳诀" not in names)
 hanyue = next(x for x in md["gongfa"] if x["id"] == G.HANYUE_JUE)
-check("练气档看懂 tier1 功法（skill_count=2）",
-      hanyue["readable"] is True and hanyue["skill_count"] == 2)
+check("练气档看懂 tier1 功法（skill_count=3）",
+      hanyue["readable"] is True and hanyue["skill_count"] == 3)
 ft = next(x for x in md["gongfa"] if x["id"] == G.FENTIAN_JUE)
 check("tier10 功法对练气档隐藏机制（readable=False 且无技能/加成字段值）",
       ft["readable"] is False and ft["skill_count"] is None

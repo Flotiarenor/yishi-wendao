@@ -195,7 +195,7 @@ check("火克金 → 伤害更高", dmg_fire_vs_gold > dmg_fire_vs_water,
 b = make(extra_actions=(STUN_SKILL,))
 b.submit("stun_hit")
 b.run_window()
-check("定身状态已施加到敌人", b.e.has_status("root") or b.e.statuses == {})
+check("定身状态已施加到敌人", b.e.has_status("root"), f"{b.e.statuses}")
 t_root = b.e.statuses.get("root", {}).get("until", 0)
 if t_root:
     b.clock.t = t_root
@@ -247,8 +247,6 @@ for speed, label in ((0.5, "慢兽"), (2.0, "快兽")):
         check("快兽行动次数 > 0", n_enemy >= 1, f"{n_enemy}")
     else:
         check("慢兽行动次数 ≥ 0", n_enemy >= 0)
-check("快兽出手比慢兽频繁",
-      True)   # 由上一循环输出可见；严格比较见下方补充
 b_fast, b_slow = make(), make()
 for b, spd in ((b_fast, 2.0), (b_slow, 0.5)):
     b.e.speed = spd
@@ -263,6 +261,32 @@ for b, spd in ((b_fast, 2.0), (b_slow, 0.5)):
 n_fast = len([e for e in b_fast.timeline if e.get("actor") == "enemy"])
 n_slow = len([e for e in b_slow.timeline if e.get("actor") == "enemy"])
 check("快兽出手次数 > 慢兽", n_fast > n_slow, f"快 {n_fast} vs 慢 {n_slow}")
+
+# ============ 8. 状态机械效果（P4-R4 回归护栏） ============
+print("== 8 状态机械效果 ==")
+# 闪避：命中判定落空 → 敌方不掉血（验证 battle 把 hit_roll 传进了结算）
+b = make()
+b.e.hp = b.e.hp_max = 10 ** 6
+b.e.add_status("evade", 10 ** 9, 1, {"chance": 1.0})
+b._hit = lambda pa: 0.0
+hp_before = b.e.hp
+b.submit("attack")
+b.run_window()
+check("闪避在真实 Battle 生效（命中判定落空 → 敌方未掉血）",
+      b.e.hp == hp_before, f"{hp_before} → {b.e.hp}")
+
+# 迟钝：有效速度下降（后续动作变慢）
+SLOW_SELF = Action(key="slow_self", name="迟钝", kind="utility", qi_cost=0, tier=1,
+                   timing=Timing(windup=0, recovery=100),
+                   components=(ApplyStatus(key="slow", duration_li=10 ** 6,
+                                           tags=("buff",),
+                                           params={"speed_mult": 0.5}),))
+b = make(extra_actions=(SLOW_SELF,))
+base_speed = b.p.effective_speed()
+b.submit("slow_self")
+b.run_window()
+check("迟钝在真实 Battle 生效（有效速度下降）",
+      b.p.effective_speed() < base_speed, f"{base_speed} → {b.p.effective_speed()}")
 
 print(f"\n== 结果：{_PASS} 过 / {_FAIL} 败 ==")
 sys.exit(1 if _FAIL else 0)

@@ -37,8 +37,7 @@ from content import ids as IDS
 from content import pills as P
 from content import sites as ST
 from content import skills as SK
-from engine import battle as BTL
-from engine import rules as R
+from engine import status as STATUS   # 注意：content.sites 已占用 ST 别名
 from engine import settings as S
 from engine.action import (Action, ApplyStatus, Damage, Heal, Purchase, QiGain,
                            Timing)
@@ -52,9 +51,7 @@ TARGETS = ("self", "enemy", "all_enemies")
 TAGS = ("buff", "debuff", "control")
 PILL_KINDS = ("breakthrough", "other")
 PILL_EFFECT_KEYS = ("heart_demon", "cultivate_bonus")
-# 立即结算键（效果模板 apply_key 指向的函数）：与 engine.effects.APPLY_FX 的内置项对应。
-# 不 import 那个模块——它已被标记为待删除的死代码，校验器不该依赖它。
-IMMEDIATE_FX_KEYS = ("restore_qi",)
+
 GONGFA_TIERS = tuple(sorted(G.TIER_LABELS))          # (1,10,14,18,22)
 ACTION_TIERS = (1, 2, 3, 4)                          # engine.rules.TIER_MULT
 SKILL_ID_PREFIX = "sk"
@@ -151,7 +148,9 @@ def check_action(action: Action, where: str, out: list):
             for tag in comp.tags:
                 if tag not in TAGS:
                     _warn(cw, f"未知 tag：{tag!r}（施加边由 debuff/control 决定）", out)
-            if comp.key not in CE.EFFECTS:
+            if comp.key not in STATUS.known_keys():
+                _warn(cw, f"状态键 {comp.key!r} 不在 engine/status.py 行为表 → 施加后无机械效果", out)
+            elif comp.key not in CE.EFFECTS:
                 _warn(cw, f"状态键 {comp.key!r} 无效果模板（UI 无展示名）", out)
         elif isinstance(comp, QiGain):
             if not _is_num(comp.rate_mult) or comp.rate_mult < 0:
@@ -407,13 +406,10 @@ def check_actions(out: list):
 
 def check_effects(out: list):
     """效果模板：引擎消费者、孤儿模板、ApplyStatus 键无模板。"""
-    # 真正有机械效果的键 = 乘区 + 控制 + 立即结算（breath 经 apply_key 生效）
     for key, tpl in CE.EFFECTS.items():
-        recognized = (key in R.STATUS_MULT or key in BTL.CONTROL_KEYS
-                      or (tpl.apply_key and tpl.apply_key in IMMEDIATE_FX_KEYS))
-        if not recognized:
-            _warn("effects", f"模板 {key!r}（{tpl.name}）无引擎消费者 → 施加后不生效"
-                             f"（STATUS_MULT/CONTROL_KEYS/APPLY_FX 都不认识）", out)
+        if key not in STATUS.known_keys():
+            _warn("effects", f"模板 {key!r}（{tpl.name}）不在 engine/status.py 行为表 → "
+                             f"施加后无机械效果", out)
     used = set()
     for spec in SK.SKILLS.values():
         for comp in spec.action.components:

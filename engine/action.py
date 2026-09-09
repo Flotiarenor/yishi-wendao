@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
 from engine import rules as R
+from engine import status as ST
 from engine.clock import Clock, Timing
 
 
@@ -160,6 +161,14 @@ class Actor:
     def status_keys(self) -> tuple:
         return tuple(self.statuses.keys())
 
+    def status_params(self) -> dict:
+        """{key: params} —— 供 engine.status 查询（含 ApplyStatus 声明的 params）。"""
+        return {k: dict(v.get("params") or {}) for k, v in self.statuses.items()}
+
+    def effective_speed(self) -> float:
+        """基础速度 × 状态速度倍率（迟钝等）；clock 用它算前后摇。"""
+        return max(0.05, float(self.speed) * ST.speed_mult(self.statuses))
+
     def current_qi_rate(self, t: int) -> float:
         """当前回灵速率（含灵石加速；加速到期自动失效）。"""
         rate = self.qi_rate
@@ -264,7 +273,8 @@ def begin(actor: Actor, target: Actor, action: Action, clock: Clock,
     if action.qi_cost > 0:
         actor.qi -= action.qi_cost
         spent = action.qi_cost
-    land_t, end_t = clock.schedule(actor.key, action.timing)
+    land_t, end_t = clock.schedule(actor.key, action.timing,
+                                   speed=actor.effective_speed())
     pa = PendingAction(actor=actor, action=action, start_t=t, land_t=land_t,
                        end_t=end_t, qi_spent=spent, seq=seq)
     actor.pending = pa
@@ -272,15 +282,18 @@ def begin(actor: Actor, target: Actor, action: Action, clock: Clock,
 
 
 def land(pending: PendingAction, target: Actor, clock: Clock,
-         jitter_roll: float = 0.5) -> ActionOutcome:
-    """动作落地：结算全部组件。调用方须已确认前摇完成且未被取消。"""
+         jitter_roll: float = 0.5, hit_roll: float = 1.0) -> ActionOutcome:
+    """动作落地：结算全部组件。调用方须已确认前摇完成且未被取消。
+
+    hit_roll 为命中判定随机数（闪避用）；默认 1.0 = 不触发闪避（木桩/单测友好）。
+    """
     actor, action = pending.actor, pending.action
     out = ActionOutcome(action_key=action.key, actor=actor.key,
                         target=target.key, start_t=pending.start_t,
                         land_t=pending.land_t, end_t=pending.end_t,
                         qi_spent=pending.qi_spent)
     for comp in action.components:
-        _run_component(comp, actor, target, action, clock, out, jitter_roll)
+        _run_component(comp, actor, target, action, clock, out, jitter_roll, hit_roll)
     if actor.pending is pending:
         actor.pending = None
     return out
@@ -300,7 +313,7 @@ def cancel(pending: PendingAction) -> int:
 
 
 def execute(actor: Actor, target: Actor, action: Action, clock: Clock,
-            jitter_roll: float = 0.5) -> ActionOutcome:
+            jitter_roll: float = 0.5, hit_roll: float = 1.0) -> ActionOutcome:
     """起手 + 立即落地（便捷入口：无前摇打断场景，如木桩工具/单测）。
 
     有前摇的动作仍会推进 next_t，但组件当刻结算——**真战斗请用 begin()/land()**。
@@ -312,12 +325,19 @@ def execute(actor: Actor, target: Actor, action: Action, clock: Clock,
         out.ok = False
         out.reason = reason
         return out
-    return land(pa, target, clock, jitter_roll)
+    return land(pa, target, clock, jitter_roll, hit_roll)
 
 
 def _run_component(comp, actor: Actor, target: Actor, action: Action,
-                   clock: Clock, out: ActionOutcome, jitter_roll: float):
+                   clock: Clock, out: ActionOutcome, jitter_roll: float,
+                   hit_roll: float = 1.0):
     if isinstance(comp, Damage):
+        # 闪避：目标持有 evade 且命中判定落空 → 本次伤害归零（随机数由 battle 传入）
+        chance = ST.hit_negate_chance(target.statuses)
+        if chance > 0 and hit_roll < chance:
+            out.lines.append(
+                f"【{target.name or target.key}】身形一晃，闪开了【{action.display()}】。")
+            return
         total_li = out.end_t - out.start_t
         ctx = R.DamageCtx(
             base=comp.power,
@@ -330,8 +350,8 @@ def _run_component(comp, actor: Actor, target: Actor, action: Action,
             actual_li=total_li,
             duration_weight=action.duration_weight,
             element_mult=R.ke_mult(comp.element, target.element),
-            attacker_status=actor.status_keys(),
-            defender_status=target.status_keys(),
+            attacker_status=actor.status_params(),
+            defender_status=target.status_params(),
             jitter_roll=jitter_roll,
         )
         dmg = R.resolve_damage(ctx)
@@ -347,6 +367,12 @@ def _run_component(comp, actor: Actor, target: Actor, action: Action,
         out.lines.append(
             f"【{action.display()}】对【{side.name or side.key}】施加"
             f"【{comp.key}】（{comp.duration_li / 100:.1f} 息）。")
+        # 控制类：施加瞬间推后目标 next_t（定身/晕眩；迟钝走速度倍率）
+        push = ST.push_back_li(comp.key, comp.params)
+        if side is target and push:
+            clock.push_back(side.key, push)
+            out.lines.append(
+                f"【{side.name or side.key}】被控，行动推后 {push / 100:.1f} 息。")
     elif isinstance(comp, QiGain):
         got = min(actor.qi_max - actor.qi,
                   comp.rate_mult * actor.current_qi_rate(clock.t))

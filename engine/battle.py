@@ -23,6 +23,7 @@
 from dataclasses import dataclass, field
 
 from engine import rules as R
+from engine import status as ST
 from engine.action import (Action, Actor, ActionOutcome, PendingAction, begin,
                            cancel, can_execute, land)
 from engine.clock import (SIDE_ENEMY, SIDE_PLAYER, Clock, Timing, recovery_li,
@@ -43,8 +44,8 @@ R_CONDITION_FAILED = "condition_failed"
 R_QUEUE_EMPTY = "queue_empty"
 R_WINDOW_OPEN = "window_open"      # 队列未满窗口，需继续排或点跳过
 
-# 控制类效果（前摇被打断的触发源）
-CONTROL_KEYS = frozenset({"root", "stun"})
+# 控制类效果（前摇被打断的触发源）——权威定义在 engine/status.py
+CONTROL_KEYS = ST.CONTROL_KEYS
 
 # 决策窗口下限（厘息）：保证玩家每轮至少能排一个基准动作
 MIN_WINDOW_LI = 600
@@ -191,7 +192,7 @@ class Battle:
             if a is None:
                 continue
             from engine.clock import total_li
-            acc += total_li(a.timing, self.p.speed)
+            acc += total_li(a.timing, self.p.effective_speed())
             q.append({"key": key, "name": a.display(), "qi_cost": a.qi_cost,
                       "end_t": acc})
         return {
@@ -235,7 +236,7 @@ class Battle:
         if a is None:
             self.last_reason = R_UNKNOWN_ACTION
             return False, R_UNKNOWN_ACTION
-        acc = sum(total_li(self.actions[k].timing, self.p.speed)
+        acc = sum(total_li(self.actions[k].timing, self.p.effective_speed())
                   for k in self.queue if k in self.actions)
         if acc >= self.window_li():
             self.last_reason = R_WINDOW_OPEN     # 这一轮已排满
@@ -311,7 +312,7 @@ class Battle:
             # 落地
             if pa.actor.pending is not pa:
                 continue          # 已被打断
-            out = land(pa, self.e, self.clock, self._jitter(pa))
+            out = land(pa, self.e, self.clock, self._jitter(pa), self._hit(pa))
             self._record(out, rep)
             self._check_end(rep)
         # 队列跑完后推进到玩家下次可动（敌方可能还有行动）
@@ -407,7 +408,7 @@ class Battle:
             self._advance_until(pa.land_t, rep)
         if pa.actor.pending is not pa:
             return
-        out = land(pa, self.p, self.clock, self._jitter(pa))
+        out = land(pa, self.p, self.clock, self._jitter(pa), self._hit(pa))
         self._record(out, rep)
 
     def _record(self, out: ActionOutcome, rep: WindowReport):
@@ -431,7 +432,7 @@ class Battle:
         refund = cancel(pa)
         # 后摇照常推进（"退灵气 + 算后摇"）
         from engine.clock import recovery_li
-        dst_next = pa.start_t + recovery_li(pa.action.timing, dst.speed)
+        dst_next = pa.start_t + recovery_li(pa.action.timing, dst.effective_speed())
         self.clock.set_next_t(dst.key, max(self.clock.next_t(dst.key), dst_next))
         self.timeline.append({"t": self.clock.t, "type": "interrupt",
                               "actor": dst.key, "action": pa.action.key,
@@ -450,8 +451,13 @@ class Battle:
         rep.outcome = self._outcome
 
     def _jitter(self, pa: PendingAction) -> float:
-        """伤害浮动随机数：salt 含行动实例序号（不依赖调用次数）。"""
+        """伤害浮动随机数：salt 含行动实例序号。"""
         salt = f"bat{self.battle_id}:{pa.actor.key}:{pa.action.key}:{pa.seq}"
+        return self.rng.roll(salt)
+
+    def _hit(self, pa: PendingAction) -> float:
+        """命中判定随机数（闪避用）：与伤害浮动分不同 salt，互不串流。"""
+        salt = f"bat{self.battle_id}:hit:{pa.actor.key}:{pa.action.key}:{pa.seq}"
         return self.rng.roll(salt)
 
     # ============================================================

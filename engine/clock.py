@@ -151,12 +151,13 @@ class Clock:
         return max(0, self._next[other] - self.t)
 
     # ---------- 结算 ----------
-    def schedule(self, key, timing: Timing):
+    def schedule(self, key, timing: Timing, speed: float = None):
         """某方完成一次动作：其可动时刻推进"实际总时长"，返回 (落地时刻, 新可动时刻)。
 
+        speed 省略时用注册速度；传入时用**有效速度**（含迟钝等状态倍率，见 action.Actor）。
         落地时刻 = 动作开始 + 实际前摇（效果生效时点，供打断判定用）。
         """
-        spd = self._speed[key]
+        spd = self._speed[key] if speed is None else float(speed)
         w = windup_li(timing, spd)
         total = w + recovery_li(timing, spd)
         start = self._next[key]

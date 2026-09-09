@@ -20,6 +20,8 @@
 import math
 from dataclasses import dataclass, field, replace
 
+from engine import status as ST
+
 # ---------- 五行"克"环（沿用 P2） ----------
 KE = {"金": "木", "木": "土", "土": "水", "水": "火", "火": "金"}
 
@@ -81,33 +83,15 @@ def jitter(salt_roll: float) -> float:
 
 
 # ---------- 状态乘区（一攻一守镜像） ----------
-# 键 = 效果模板 key，值 = (作用方, 倍率)
-#   作用方 "attacker" → 乘在"造成的伤害"上（虚弱/破势）
-#   作用方 "defender" → 乘在"受到的伤害"上（脆弱）
-STATUS_MULT = {
-    "weaken": ("attacker", 0.70),      # 虚弱：自己输出降低
-    "break": ("attacker", 0.50),       # 破势：自己输出大幅降低
-    "vulnerable": ("defender", 1.50),  # 脆弱：受到的伤害提高
-}
+# 行为表已收敛到 engine/status.py（唯一权威）：守方乘区 guard、命中判定 evade、
+# 控制推后 root/stun、降速 slow 都在那里。本函数保留为兼容入口。
+def status_mult(statuses) -> tuple:
+    """状态集合 → (攻方乘区, 守方乘区)。默认 (1.0, 1.0)。
 
-
-def status_mult(status_keys) -> tuple:
-    """一组效果键 → (攻方乘区, 守方乘区)。默认 (1.0, 1.0)。
-
-    status_keys: 可迭代的效果键（None/未知键忽略）。
-    未知键不报错——效果模板可扩展，规则层不该认识所有键。
+    statuses: {key: {"params": {...}}}（Actor.statuses）或可迭代的效果键。
+    未知键不报错——状态表可扩展，规则层不该认识所有键。
     """
-    att, dfn = 1.0, 1.0
-    for k in (status_keys or ()):
-        spec = STATUS_MULT.get(k)
-        if spec is None:
-            continue
-        side, mult = spec
-        if side == "attacker":
-            att *= mult
-        else:
-            dfn *= mult
-    return att, dfn
+    return ST.damage_mult(statuses)
 
 
 # ---------- 伤害上下文与唯一入口 ----------
@@ -124,8 +108,8 @@ class DamageCtx:
     actual_li: int = 0            # 实际总时长（厘息）
     duration_weight: float = 0.0  # 时长权重（技能属性）
     element_mult: float = 1.0     # 五行系数
-    attacker_status: tuple = ()   # 攻方身上相关效果键
-    defender_status: tuple = ()   # 守方身上相关效果键
+    attacker_status: dict = field(default_factory=dict)   # 攻方状态 {key: {"params": ...}}
+    defender_status: dict = field(default_factory=dict)   # 守方状态
     jitter_roll: float = 0.5      # 已取好的随机数 [0,1)
     extra: dict = field(default_factory=dict)   # 修饰器扩展位（armor_pen/extra_dmg…）
 

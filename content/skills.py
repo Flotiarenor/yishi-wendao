@@ -51,6 +51,7 @@ SHIFU_JIA = make_id(CAT_SKILL, 18)        # 石肤甲（撼岳诀·守）
 CANGLAN_ZHANG = make_id(CAT_SKILL, 19)    # 沧澜掌（沧澜诀·攻）
 BINGFU_SHU = make_id(CAT_SKILL, 20)       # 冰缚术（沧澜诀·困敌）
 LINGXU_BU = make_id(CAT_SKILL, 21)        # 凌虚步（踏云步·身法闪避）
+BENGSHAN_SHI = make_id(CAT_SKILL, 22)     # 崩山式（撼岳诀·晕眩重击）
 
 
 def skey(sid: int) -> str:
@@ -139,7 +140,9 @@ _skills = [
     _sk(BAOYAN_SHU, "爆炎术", "火", "attack", 12, 46, "gentle",
         "压缩炎气于一点轰然爆开，势大力沉。", unlock_fam=30, recovery=400, tier=2),
     _sk(FENTIAN_HUOHAI, "焚天火海", "火", "attack", 30, 100, "strict",
-        "焚天诀终极杀招，火海焚天。", unlock_fam=80, windup=150, recovery=600, tier=4),
+        "焚天诀终极杀招，火海焚天；护体被灼穿，受创更重。",
+        unlock_fam=80, windup=150, recovery=600, tier=4,
+        extra=(ApplyStatus(key="vulnerable", duration_li=500, tags=("debuff",)),)),
     # 木系
     _sk(QINGTENG_CHAN, "青藤缠", "木", "utility", 6, 0, "gentle",
         "藤蔓自地底涌出，缠缚困敌。", unlock_fam=10, recovery=200,
@@ -150,7 +153,9 @@ _skills = [
                            params={"mult": 0.5}),)),
     # 水系
     _sk(XUANBING_CI, "玄冰刺", "水", "attack", 4, 38, "gentle",
-        "玄水凝冰成刺，透骨奇寒。", unlock_fam=10, recovery=250, tier=2),
+        "玄水凝冰成刺，透骨奇寒；中者动作迟滞。", unlock_fam=10, recovery=250, tier=2,
+        extra=(ApplyStatus(key="slow", duration_li=500, tags=("debuff",),
+                           params={"speed_mult": 0.7}),)),
     _sk(XUANSHUI_HUSHEN, "玄水护身", "水", "defense", 6, 0, "gentle",
         "水幕绕体流转，卸去攻伐之力。", unlock_fam=30, recovery=250,
         extra=(ApplyStatus(key="guard", duration_li=400, tags=("buff",),
@@ -196,6 +201,11 @@ _skills = [
         "土灵凝肤为甲，硬撼外击。", unlock_fam=30, recovery=250,
         extra=(ApplyStatus(key="guard", duration_li=400, tags=("buff",),
                            params={"mult": 0.5}),)),
+    _sk(BENGSHAN_SHI, "崩山式", "土", "attack", 9, 34, "gentle",
+        "双掌撼地，山石崩飞，震得对手晕眩难动。", unlock_fam=30, windup=100,
+        recovery=400, tier=2,
+        extra=(ApplyStatus(key="stun", duration_li=500, tags=("control",),
+                           params={"push_li": 500}),)),
     # 沧澜诀（筑基级战斗功法·水）
     _sk(CANGLAN_ZHANG, "沧澜掌", "水", "attack", 12, 52, "gentle",
         "掌出如沧澜叠浪，一浪高过一浪。", unlock_fam=10, recovery=350, tier=3),

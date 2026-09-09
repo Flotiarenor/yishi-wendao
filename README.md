@@ -78,14 +78,22 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
   `engine/rules.py` 纯函数五段乘区 + `engine/action.py` 动作模型（组件/条件/前摇打断）+
   `engine/battle.py` 时间轴战斗（决策窗口 + 队列 + 敌方插入 + 统一灵兽进攻）+
   `content/actions.py` 动作数据化 + `tools/dummy.py` 木桩；CLI 下线（存档 I/O 迁 `server/`）。
-  基线：`test_effects` 33 + `test_hardening` 55 + `test_clock` 59 + `test_action` 53 +
-  `test_battle_time` 35 + `test_gongfa_deep` 91 + `test_server` 79 = **405 项**
-  （+ `test_content_tools` 32 + `test_replay` 16 = **453 项**）；
-  smoke 20 局 = **17 通关/3 道陨、3803 场、平均终档 22.8**
+  基线：`test_effects` 39 + `test_hardening` 55 + `test_clock` 59 + `test_action` 53 +
+  `test_battle_time` 36 + `test_gongfa_deep` 91 + `test_server` 79 = **412 项**
+  （+ `test_content_tools` 32 + `test_replay` 16 = **460 项**）；
+  smoke 20 局 = **19 通关/1 道陨、3874 场、平均终档 24.4**
+- ✅ **P4-R4** 状态效果补全（**修复 R3 回归**）：新增 `engine/status.py` 行为注册表
+  （damage_mult / hit_negate / push_back / speed_mult 四类，倍率取 `ApplyStatus.params`）——
+  `guard`（守方乘区）、`evade`（命中判定，battle 按行动实例派生 `hit_roll`）、`root`/`stun`
+  （施加瞬间推后 `next_t`）、`slow`（有效速度倍率）全部生效；`clock.schedule` 支持有效速度；
+  **删除死代码 `engine/effects.py`**（双 `resolve_damage` 消失，伤害唯一入口落实）；
+  `content/effects.py` 改时间窗口语义并补 `stun`/`slow`/`vulnerable` 模板；
+  内容补：玄冰刺+迟钝、焚天火海+脆弱、撼岳诀+崩山式（晕眩）→ **22 技能 12 功法**；
+  `test_effects` 39 项（四类行为端到端）、`test_battle_time` 36 项（Battle 级闪避/迟钝）
 - ✅ **P3.7** 正式前端（Vue3 + Vite + Pinia + TS，`frontend/`）：FastAPI 伺服 `frontend/dist`（SPA fallback，`/api` 404 不被吞）；布局 = **左状态（含切换按钮）/ 中上主内容（地图为主页面）/ 中下叙事日志（可拖拽高度）**，遇敌时**战斗临时接管主内容区**（时间轴 / 决策窗口 / 队列入队-执行 / 双方效果 / 动作可用性，常用动作在上、技能折叠）+ **修炼页**（闭关/参悟/突破/静养，参悟选择记忆）+ 坊市（灵石/背包/购买数量/买不起置灰）+ 书库（详情/装备/卸下）+ 编年史时间线 + 状态面板（五行亲和/业力）；旧 P3.6 极简面板删除（`server/static`）；顺带修复 `gongfa_detail` 对 7/12 功法抛 500 的 `SkillSpec.element` bug；`tests/test_server.py` 79 项 + 前端 E2E 27 项
 - ⬜ **P4 起未做**（详见 `docs/实现路线图.md`）：突破考验（P4）、五行宝光（P5）、死亡转世（P6）、人物势力（P7）、事件化（P8）、生成器（P9）、平衡标定（P10）、pywebview 桌面壳
-- ✅ **工具链（2026-09-10）**：`tools/content_check.py` 内容校验器（当前 0 错误 / 17 警告，
-  警告含 `guard`/`evade` 无引擎消费者——即下方待修问题 1 的回归护栏）；
+- ✅ **工具链（2026-09-10）**：`tools/content_check.py` 内容校验器（当前 0 错误 / 10 警告，
+  全部为"demo 动作孤儿"这类预期提示；P4-R4 前它曾报 `guard`/`evade` 无消费者=回归护栏）；
   `tools/gen_skill.py` 统一技能生成器（`draft → 校验 → content/skills.py 代码 / JSON`，
   手写 / AI 起草 / 随机生成共用一套规则；21 个现有技能往返无损）；
   `tools/replay.py` 指纹/重放（`bot` / `script` 两模式 + `--compare` A/B 对照）；
@@ -95,37 +103,26 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
 （换 bot 策略数字就变，与游戏好不好玩无关）。数值平衡统一在 P10 用多策略采样 + 支配策略/资源曲线等
 指标做，**不设目标通关率**。当前记录仅用于"引擎行为有没有变"的对照。
 
-## 待修问题（2026-09-10 审查，未修）
+## 待修问题（2026-09-10 审查）
 
-> 以下为一次代码审查确认的问题，**均未修改**；动手前先跑 `python main.py test` 基线。
-> 优先级从高到低。
+> 前四项已在 **P4-R4** 修复（状态效果回归 / 双伤害入口与死代码 / 测试恒真断言 / 身法槽空转），
+> 详见上方 P4-R4 条目。以下为**仍未修**的，动手前先跑 `python main.py test` 基线。
 
-1. **状态效果回归（最严重）**：R3 时间轴重构后，`guard`（防御动作 + 6 个防御类技能）、
-   `evade`（御风术/凌虚步）施加后**无任何机械效果**；`root`（青藤缠/冰缚术）只在对手
-   前摇期间起打断作用，**不推后 `next_t`**；`slow` 只存在于 R2 demo 动作、未进正式内容。
-   旧回合制 `battle.py` 曾实现这些（对照 `git show a0707be:engine/battle.py`）。
-2. **双伤害入口 / 死代码**：`engine/effects.py`（170 行，含另一套 `resolve_damage` 与
-   `EffectBag`）已无引用，违反 `docs/战斗系统定案.md` §8「伤害唯一入口」；
-   `content/effects.py` 模板的 `duration` 仍是"回合"语义，`params` 不被读取
-   （倍率硬编码在 `engine/rules.STATUS_MULT`）。
-3. **测试假通过**：`tests/test_battle_time.py` 含 `check(..., True)` 与
-   `... or b.e.statuses == {}`；`tests/test_effects.py` 含 `... or True`——恒真断言需替换。
-4. **RNG 顺序无关性名不副实**：`engine/rng.Rng._derive` 的哈希含 `counter`，多消耗一次
+1. **RNG 顺序无关性名不副实**：`engine/rng.Rng._derive` 的哈希含 `counter`，多消耗一次
    随机流会改变同一 salt 的结果；`test_battle_time.py` §5 的"额外 rng 调用不影响"断言
-   靠整数舍入偶然通过（实测 roll 0.6206 vs 0.6404）。
-5. **木桩工具与正式内容脱节**：`tools/dummy.py` 只测 `content/actions.py` 的 9 个 R2 demo
-   动作，**不测** `content/skills.py` 的 21 个正式技能。（技能数据入口已由
-   `tools/gen_skill.py` 统一，但 dummy 的流派对照仍走 demo 动作，待接正式技能。）
-6. **身法槽/五行单向**：玩家 `Actor.element` 恒为「无」；身法槽两本功法给的技能都是
-   `evade`（当前失效）；敌人 `ENEMY_STRIKE.element="无"`，敌方元素只作"被克靶子"。
-7. 文档：`docs/会话交接.md` 偏大且历史数字多（已加口径提醒）；`docs/Web架构方案.md`
-   曾引用不存在的 P3_5 任务书（已标注）；`docs/README.md` 为新的文档地图。
+   靠整数舍入偶然通过（实测 roll 0.6206 vs 0.6404）。要么按"回溯靠 counter 复原"的口径
+   改文档，要么给战斗/探索分独立子流（`Rng.fork`）。
+2. **木桩工具与正式内容脱节**：`tools/dummy.py` 只测 `content/actions.py` 的 9 个 R2 demo
+   动作，**不测** `content/skills.py` 的 22 个正式技能（技能入口已由 `tools/gen_skill.py` 统一）。
+3. **五行单向**：玩家 `Actor.element` 恒为「无」；敌人 `ENEMY_STRIKE.element="无"`，
+   敌方元素只作"被克靶子"——是否让敌方攻击也吃自己的五行，待定。
+4. 文档：`docs/会话交接.md` 偏大且历史数字多（已加口径提醒）。
 
 ## 目录结构
 
 ```
 main.py    统一入口（仓库根级）：web / smoke / test / check 四个子命令
-engine/    纯逻辑引擎（无 I/O）：clock 时间轴 / rules 纯函数规则 / action 动作模型 / battle 时间轴战斗 / game 主循环 / effects 效果运行时 / rng 确定性随机 / state 状态 / settings 数值
+engine/    纯逻辑引擎（无 I/O）：clock 时间轴 / rules 纯函数规则 / action 动作模型 / battle 时间轴战斗 / game 主循环 / status 状态行为表 / rng 确定性随机 / state 状态 / settings 数值
 content/   实体数据（id 编码）：ids / effects 效果模板 / actions 动作数据 / pills(20段) / sites(10段) / skills(30段) / gongfa(40段) / enemies(60段)
 server/    Web 壳：session 会话层(GameSession/RunManager) / savefile 存档 I/O / app FastAPI 路由（伺服 frontend/dist）/ main 启动
 frontend/  正式前端（Vue3+Vite+Pinia+TS）：src/api 客户端 / src/stores Pinia / src/views 各界面 / dist 构建产物（gitignore）

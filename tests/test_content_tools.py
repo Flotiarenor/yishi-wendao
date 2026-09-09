@@ -67,8 +67,9 @@ errs = [i for i in issues if i.severity == CC.ERROR]
 warns = [i for i in issues if i.severity == CC.WARN]
 check("现有内容 0 错误", not errs, f"{errs[:3]}")
 print(f"  （当前 {len(warns)} 条警告：效果无消费者 / demo 动作孤儿等，属已知问题）")
-check("校验器能报出 guard/evade 无引擎消费者（回归护栏）",
-      any("guard" in i.message or "evade" in i.message for i in warns))
+check("guard/evade 已有引擎行为（P4-R4 回归已修复，不再告警）",
+      not any("guard" in i.message or "evade" in i.message for i in warns),
+      str([i.message for i in warns if "guard" in i.message or "evade" in i.message]))
 check("id 字面量扫描可用", len(CC.scan_id_literals()) >= 20,
       f"{len(CC.scan_id_literals())}")
 check("settings 校验不报错", not has_error([i for i in issues if i.where == "settings"]))
