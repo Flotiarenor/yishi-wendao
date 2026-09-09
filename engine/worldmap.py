@@ -106,6 +106,11 @@ _TRAIL_WIDTH = 0.004      # 小径 2 m
 _ROAD_TOL = 0.05          # 官道判定容差 25 m
 _TRAIL_TOL = 0.02         # 小径判定容差 10 m
 
+# 河宽（里，定案 §4.4）：**沿程渐变**——源头窄、下游宽
+_RIVER_W_HEAD = 0.05      # 25 m
+_RIVER_W_TAIL = 0.40      # 200 m
+_FORD_R = 0.03            # 渡口判定半径（里）= 15 m
+
 
 def _dist_point_seg(px: float, py: float, ax: float, ay: float,
                     bx: float, by: float) -> float:
@@ -378,14 +383,16 @@ class _FeatureTuple(tuple):
 
 @dataclass(frozen=True)
 class River:
-    """一条河（折线 + 格序列 + 长度）。
+    """一条河（折线 + 格序列 + 长度 + **沿程渐变的河宽**）。
 
-    `cells` 与 `fords` 均为 **(cx, cy) 格坐标**，与 `Road.cells` / `PathResult.cells` 同序。
+    `cells` 与 `fords` 均为 **(cx, cy) 格坐标**（`cells` 仅供调试 / ASCII）。
+    `widths` 与 `points` 等长：源头 `_RIVER_W_HEAD` → 下游 `_RIVER_W_TAIL`（里）。
     """
     points: tuple
     cells: tuple
     length_li: float
     fords: tuple = ()
+    widths: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -582,6 +589,7 @@ class WorldMap:
         self._base = None            # bytearray 基础地形（**生成用真相**；查询经 `_cell_terrain` 判定）
         self._cell_tcache = {}       # idx → 特征地形 id（>0）或 -1（=纯噪声，走连续采样）
         self._road_idx = None        # 路网线段空间索引（100 里格分桶）——几何判定用
+        self._river_idx = None       # 河流线段空间索引（同上）
         self._elev = None            # list[float] 高程场（城镇评分用）
         self._wards = None           # tuple[(x, y, r), ...]
         self._rivers = None          # tuple[River, ...]
@@ -724,20 +732,23 @@ class WorldMap:
             self._ensure_towns()
         cx, cy = cell_of(x, y)
         idx = cy * _N + cx
-        if with_roads:
-            t = self._road_cells.get(idx)
-            if t == _T_FORD:          # 渡口按格；路网走几何判定（真实宽度 0.02 里）
-                return t
-        t = self._town_cells.get(idx)
-        if t is not None:
-            return t
-        if with_roads:
-            t = self._road_at(x, y)
-            if t:
-                return t
         t = self._cell_terrain(cx, cy)
-        if t > 0:
+        if t == _T_VOID or t == _T_WARD:
             return t
+        if t == _T_FORD:
+            return t
+        tt = self._town_cells.get(idx)
+        if tt is not None:
+            return tt
+        tt = self._river_at(x, y)
+        if tt:
+            return tt                     # 河流是屏障（渡口除外）——先于路网判定
+        if with_roads:
+            tt = self._road_at(x, y)
+            if tt:
+                return tt
+        if t > 0:
+            return t                      # 湖泊
         return classify_point(self.world_seed, x, y)
 
     def elevation_at(self, x: float, y: float) -> float:
@@ -747,21 +758,24 @@ class WorldMap:
     def _terrain_cell(self, cx: int, cy: int, with_roads: bool = True) -> int:
         """格坐标 → 地形 id（**该格中心的采样** + 覆盖层）——内部调用/渲染降采样用。"""
         idx = cy * _N + cx
-        if with_roads:
-            t = self._road_cells.get(idx)
-            if t == _T_FORD:          # 渡口仍按格（过河点），其余路网走几何判定
-                return t
-        t = self._town_cells.get(idx)
-        if t is not None:
-            return t
-        x, y = center_of(cx, cy)
-        if with_roads:
-            t = self._road_at(x, y)
-            if t:
-                return t
         t = self._cell_terrain(cx, cy)
+        if t == _T_VOID or t == _T_WARD:
+            return t                      # 世界边界 / 禁制：硬阻挡优先
+        if t == _T_FORD:
+            return t                      # 渡口按格（保证 MAINLAND 连通）
+        tt = self._town_cells.get(idx)
+        if tt is not None:
+            return tt
+        x, y = center_of(cx, cy)
+        tt = self._river_at(x, y)
+        if tt:
+            return tt                     # 河流是屏障（渡口除外）——先于路网判定
+        if with_roads:
+            tt = self._road_at(x, y)
+            if tt:
+                return tt
         if t > 0:
-            return t
+            return t                      # 湖泊（面积型特征）
         return classify_point(self.world_seed, x, y)
 
     # ---------- 惰性生成入口 ----------
@@ -806,6 +820,43 @@ class WorldMap:
                     for cx in range(c0x, c1x + 1):
                         idx.setdefault(cy * _N + cx, []).append(seg)
         self._road_idx = idx
+
+    def _build_river_index(self):
+        """把河流折线按 100 里格分桶（河宽 ≤0.2 里，线段自身覆盖的格即可）。"""
+        idx = {}
+        for rv in (self._rivers or ()):
+            pts = rv.points
+            wds = rv.widths
+            for k in range(1, len(pts)):
+                ax, ay = pts[k - 1]
+                bx, by = pts[k]
+                w = ((wds[k - 1] + wds[k]) * 0.5) if wds else _RIVER_W_HEAD
+                c0x, c0y = cell_of(min(ax, bx), min(ay, by))
+                c1x, c1y = cell_of(max(ax, bx), max(ay, by))
+                seg = (ax, ay, bx, by, w)
+                for cy in range(c0y, c1y + 1):
+                    for cx in range(c0x, c1x + 1):
+                        idx.setdefault(cy * _N + cx, []).append(seg)
+        self._river_idx = idx
+
+    def _river_at(self, x: float, y: float) -> int:
+        """几何判定：该点是否在河面内（渡口优先）。返回 T_WATER / T_FORD，否则 0。"""
+        if self._river_idx is None:
+            self._ensure_rivers()
+            self._build_river_index()
+        cx, cy = cell_of(x, y)
+        segs = self._river_idx.get(cy * _N + cx)
+        if not segs:
+            return 0
+        for ax, ay, bx, by, w in segs:
+            if _dist_point_seg(x, y, ax, ay, bx, by) <= w * 0.5:
+                for rv in self._rivers:
+                    for (fcx, fcy) in rv.fords:
+                        fx, fy = center_of(fcx, fcy)
+                        if (x - fx) ** 2 + (y - fy) ** 2 <= _FORD_R * _FORD_R:
+                            return _T_FORD
+                return _T_WATER
+        return 0
 
     def _road_at(self, x: float, y: float) -> int:
         """几何判定：该点是否在路面判定容差内。返回 T_ROAD / T_TRAIL，否则 0。
@@ -1003,8 +1054,9 @@ class WorldMap:
                     end = cur
                     reason = "sink"
                     break
-                tid = base[best[0] * n + best[1]]
-                if tid == _T_DEEPSEA or tid == _T_WATER:
+                bidx = best[0] * n + best[1]
+                tid = base[bidx]
+                if tid == _T_DEEPSEA or tid == _T_WATER or bidx in river_cell_set:
                     end = best
                     reason = "water"
                     break
@@ -1018,9 +1070,8 @@ class WorldMap:
                 end = cur
                 reason = "capped"
 
-            # 落水：走过的格（不含终止格）标为 T_WATER
-            for cy, cx in path:
-                base[cy * n + cx] = _T_WATER
+            # R2b：**不再把河写进地形数组**——河流改为几何覆盖（折线 + 沿程渐变宽度）。
+            # 生成期仍需要"河流是屏障"这一语义 → 由 river_cell_set 承担（下方统一登记）。
             # 局部洼地 → 小湖（总湖面积 ≤ 30 格）
             if reason == "sink" and end is not None:
                 ey, ex = end
@@ -1044,13 +1095,20 @@ class WorldMap:
                 cells = tuple((cx, cy) for cy, cx in path)
                 pts = tuple(center_of(cx, cy) for cx, cy in cells)
                 length = _polyline_li(pts)
-                rivers.append([cells, pts, length])
+                # R2b：河宽**沿程渐变**（源头窄 → 下游宽）
+                _m = len(pts) - 1
+                if _m > 0:
+                    widths = tuple(_RIVER_W_HEAD + (_RIVER_W_TAIL - _RIVER_W_HEAD) * (i / _m)
+                                   for i in range(len(pts)))
+                else:
+                    widths = (_RIVER_W_HEAD,)
+                rivers.append([cells, pts, length, widths])
                 for cx, cy in cells:
                     river_cell_set.add(cy * n + cx)
 
         # 渡口：每条河上按序每 ≥25 格挑一个高程最低的格；两端各留 1 格
         out = []
-        for cells, pts, length in rivers:
+        for cells, pts, length, widths in rivers:
             interior = cells[1:-1]
             fords = []
             for i in range(0, len(interior), 25):
@@ -1068,7 +1126,7 @@ class WorldMap:
                 base[best[1] * n + best[0]] = _T_FORD
                 river_cell_set.add(best[1] * n + best[0])
             out.append(River(points=pts, cells=cells, length_li=length,
-                             fords=tuple(fords)))
+                             fords=tuple(fords), widths=widths))
         self._rivers = _FeatureTuple(out)
         self._river_cells = frozenset(river_cell_set)
         self._force_anchors_walkable()
@@ -1117,7 +1175,8 @@ class WorldMap:
         passable = bytearray(n * n)
         for idx in range(n * n):
             t = base[idx]
-            passable[idx] = 0 if (t in _HARD or t == _T_WATER) else 1
+            passable[idx] = 0 if (t in _HARD or t == _T_WATER
+                                  or (idx in self._river_cells and t != _T_FORD)) else 1
         comp = [-1] * (n * n)
         best_id = -1
         best_size = -1
@@ -1183,7 +1242,8 @@ class WorldMap:
                 for cx in range(cx0, cx0 + _DOMAIN_CELLS, 2):
                     idx = row + cx
                     tid = base[idx]
-                    if tid in _HARD or tid == _T_WATER or tid == _T_FORD:
+                    if (tid in _HARD or tid == _T_WATER or tid == _T_FORD
+                            or idx in self._river_cells):
                         continue
                     if comp[idx] != best_comp:      # 前置：候选必须落在 MAINLAND 内
                         continue
@@ -1494,7 +1554,7 @@ class WorldMap:
             for cx in range(n):
                 idx = row + cx
                 tid = base[idx]
-                if tid in _HARD or tid == _T_WATER:
+                if tid in _HARD or tid == _T_WATER or idx in self._river_cells:
                     continue
                 d = R.domain_of_cell(cx, cy)
                 ti = tier_idx[R.DOMAINS[d].tier]
