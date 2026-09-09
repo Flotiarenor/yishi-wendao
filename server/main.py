@@ -8,6 +8,7 @@
 供测试/程序化使用：build_app(config=None) -> FastAPI（只建 app，不启动）。
 """
 import argparse
+import socket
 
 import uvicorn
 
@@ -25,11 +26,35 @@ def build_app(config: dict = None):
     return create_app(config)
 
 
+def _port_in_use(host: str, port: int) -> bool:
+    """端口是否已被监听（**不加** SO_REUSEADDR——Windows 下加了会误判为可用）。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, port))
+            return False
+        except OSError:
+            return True
+
+
+def _free_port_hint(port: int) -> str:
+    return (
+        f"端口 {port} 已被占用——通常是上次没退出的服务残留"
+        f"（VSCode 关终端不会自动杀子进程）。\n"
+        f"  查占用：netstat -ano | findstr :{port}\n"
+        f"  结束它：taskkill /PID <PID> /T /F\n"
+        f"  或换端口：python main.py web --port 8044"
+    )
+
+
 def main(argv=None):
     args = parse_args(argv)
+    if _port_in_use(args.host, args.port):
+        print(f"⚠ {_free_port_hint(args.port)}")
+        return 1
     print(f"仙途文字修仙 · 浏览器访问: http://{args.host}:{args.port}  （Ctrl+C 退出）")
     app = build_app()
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    return 0
 
 
 if __name__ == "__main__":

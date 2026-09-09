@@ -118,6 +118,10 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
   `index.html` 响应 `Cache-Control: no-cache`（每次回源校验），带哈希的 `/assets/*` 长缓存
   （`immutable`）。此前无缓存头，浏览器可能拿旧 `index.html` → 重建后仍加载旧 JS。
   `test_server` 81（+2 缓存头）。
+- ✅ **P4-R10** 启动器端口占用提示（2026-09-10，用户"重启 VSCode 仍报 8000 占用"）：根因是
+  VSCode 关终端**不杀子进程** → 孤儿 `main.py` 一直占着端口。`server/main.py` 启动前检测端口，
+  占用时打印「`netstat -ano | findstr :PORT` 找 PID / `taskkill /PID <PID> /T /F` / 或
+  `--port 8044`」并返回退出码 1；根 `main.py` 透传退出码。
 - ✅ **P3.7** 正式前端（Vue3 + Vite + Pinia + TS，`frontend/`）：FastAPI 伺服 `frontend/dist`（SPA fallback，`/api` 404 不被吞）；布局 = **左状态（含切换按钮）/ 中上主内容（地图为主页面）/ 中下叙事日志（可拖拽高度）**，遇敌时**战斗临时接管主内容区**（时间轴 / 决策窗口 / 队列入队-执行 / 双方效果 / 动作可用性，常用动作在上、技能折叠）+ **修炼页**（闭关/参悟/突破/静养，参悟选择记忆）+ 坊市（灵石/背包/购买数量/买不起置灰）+ 书库（详情/装备/卸下）+ 编年史时间线 + 状态面板（五行亲和/业力）；旧 P3.6 极简面板删除（`server/static`）；顺带修复 `gongfa_detail` 对 7/12 功法抛 500 的 `SkillSpec.element` bug；`tests/test_server.py` 79 项 + 前端 E2E 27 项
 - ⬜ **P4 起未做**（详见 `docs/实现路线图.md`）：突破考验（P4）、五行宝光（P5）、死亡转世（P6）、人物势力（P7）、事件化（P8）、生成器（P9）、平衡标定（P10）、pywebview 桌面壳
 - ✅ **工具链（2026-09-10）**：`tools/content_check.py` 内容校验器（当前 0 错误 / 10 警告，

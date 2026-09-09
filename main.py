@@ -42,7 +42,9 @@ USAGE = """仙途 · 文字修仙 —— 统一入口
 
 def _run_web(argv):
     from server.main import main as web_main
-    web_main(argv)
+    rc = web_main(argv)
+    if rc:
+        sys.exit(rc)
 
 
 def _run_smoke(argv):
