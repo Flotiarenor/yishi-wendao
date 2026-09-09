@@ -287,30 +287,25 @@ try {
         !!document.querySelector(".tl-act .tl-wind") && !!document.querySelector(".tl-act .tl-rec"),
         textOf(".tl-track").slice(0, 40),
       );
-      // 再点同一动作 → 自动撤回（左键 toggle）
+      // 再点同一动作 → 重复排入（允许重复施放）
       const queuedBtn = document.querySelector(".cmd-row .act.queued");
       if (queuedBtn) {
         click(queuedBtn);
-        const cleared = await waitFor(() => !textOf(".queue").includes("止于"), 6000);
-        check("6 再点同一动作 → 自动撤回", cleared, textOf(".queue").slice(0, 40));
+        const two = await waitFor(
+          () => (textOf(".queue").match(/止于/g) || []).length >= 2,
+          6000,
+        );
+        check("6 再点同一动作 → 重复排入（可重复施放）", two, textOf(".queue").slice(0, 60));
       }
-      // 重新排入 → 点队列条目撤回
-      const usable2 = [...document.querySelectorAll(".cmd-row .act")].find((b) => !b.disabled);
-      if (usable2) {
-        click(usable2);
-        await waitFor(() => textOf(".queue").includes("止于"), 6000);
-        const qItem = document.querySelector(".queue .q-item");
-        if (qItem) {
-          click(qItem);
-          const cleared2 = await waitFor(() => !textOf(".queue").includes("止于"), 6000);
-          check("6 点队列条目 → 撤回", cleared2, textOf(".queue").slice(0, 40));
-        }
-      }
-      // 重新排入并执行
-      const usable3 = [...document.querySelectorAll(".cmd-row .act")].find((b) => !b.disabled);
-      if (usable3) {
-        click(usable3);
-        await waitFor(() => textOf(".queue").includes("止于"), 6000);
+      // 点队列条目 → 撤回一个
+      const qItem = document.querySelector(".queue .q-item");
+      if (qItem) {
+        click(qItem);
+        const one = await waitFor(
+          () => (textOf(".queue").match(/止于/g) || []).length === 1,
+          6000,
+        );
+        check("6 点队列条目 → 撤回一个", one, textOf(".queue").slice(0, 60));
       }
       const exec = byText(".cmd-row button", "执行本轮");
       if (exec) {

@@ -124,27 +124,15 @@ function queuedCount(key: string): number {
   return st ? st.queue.filter((q) => q.key === key).length : 0;
 }
 
-/** 能否点击：已排的永远可点（用于撤回）；未排的需可用且窗口未满 */
-function canClickAction(a: { key: string; available: boolean }): boolean {
+/** 能否排入：动作可用且窗口未满（同一动作可重复排入） */
+function canClickAction(a: { available: boolean }): boolean {
   const st = b.value;
-  if (!st || st.ended || s.busy) return false;
-  if (queuedCount(a.key) > 0) return true;
-  return a.available && !windowOpen.value;
+  return !!st && !st.ended && !s.busy && a.available && !windowOpen.value;
 }
 
-/** 点击动作：未排 → 排入；已排 → 撤回最后一个（再点一次即撤销，用户要求） */
+/** 点击动作 = 排入（可重复施放；撤回请点下方队列条目） */
 function submit(key: string) {
-  const st = b.value;
-  if (!st) return;
-  let idx = -1;
-  for (let i = st.queue.length - 1; i >= 0; i--) {
-    if (st.queue[i].key === key) {
-      idx = i;
-      break;
-    }
-  }
-  if (idx >= 0) void s.battleUnqueue(idx);
-  else void s.battleSubmit(key);
+  void s.battleSubmit(key);
 }
 function execute() {
   void s.battleSkip();
@@ -265,13 +253,7 @@ const playerEffects = computed(() => b.value?.effects?.player || []);
         class="act"
         :class="{ na: !a.available && !queuedCount(a.key), queued: queuedCount(a.key) > 0 }"
         :disabled="!canClickAction(a)"
-        :title="
-          queuedCount(a.key)
-            ? `点击撤回最后一个（已排 ${queuedCount(a.key)}）`
-            : a.available
-              ? a.desc
-              : reasonText(a.reason)
-        "
+        :title="a.available ? a.desc : reasonText(a.reason)"
         @click="submit(a.key)"
       >
         <span class="act-name">
@@ -296,7 +278,7 @@ const playerEffects = computed(() => b.value?.effects?.player || []);
         </button>
       </div>
       <span v-if="!b.queue.length" class="dim">
-        （空 —— 点上方动作排入；再点同一动作即撤回）
+        （空 —— 点上方动作排入；点下方队列条目可撤回）
       </span>
       <span
         v-for="(q, i) in b.queue"
@@ -326,13 +308,7 @@ const playerEffects = computed(() => b.value?.effects?.player || []);
         class="act"
         :class="{ na: !a.available && !queuedCount(a.key), queued: queuedCount(a.key) > 0 }"
         :disabled="!canClickAction(a)"
-        :title="
-          queuedCount(a.key)
-            ? `点击撤回最后一个（已排 ${queuedCount(a.key)}）`
-            : a.available
-              ? a.desc
-              : reasonText(a.reason)
-        "
+        :title="a.available ? a.desc : reasonText(a.reason)"
         @click="submit(a.key)"
       >
         <span class="act-name">
