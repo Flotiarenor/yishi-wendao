@@ -78,6 +78,13 @@ function equip() {
   if (!slot) return;
   void s.learn(d.name, slot);
 }
+/** 参悟入门后刷新详情（否则面板仍显示旧熟悉度） */
+async function comprehendEntry() {
+  const d = detail.value;
+  if (!d) return;
+  const r = await s.comprehend(d.name, 5);
+  if (r?.ok) await s.openDetail(d.name);
+}
 function unload() {
   const d = detail.value;
   if (!d || !d.slot) return;
@@ -165,19 +172,18 @@ function pct(x: number | undefined) {
                   装备
                 </button>
                 <span v-if="!hasFreeSlot" class="dim small">槽位已满，先卸下一个</span>
-                <button class="btn mini" :disabled="s.busy" @click="s.comprehend(detail.name, 5)">
-                  参悟入门（5 日）
-                </button>
               </template>
               <button v-else-if="detail.slot" class="btn mini danger" :disabled="s.busy" @click="unload">
                 卸下（{{ detail.slot }}）
               </button>
-              <span v-else class="dim small">
-                <template v-if="!detail.owned">尚未拥有（先到坊市购得）</template>
-                <template v-else-if="detail.familiarity < FAM_ENTRY">
-                  熟悉度需 ≥ {{ FAM_ENTRY }} 才能入池（先参悟）
-                </template>
-              </span>
+              <span v-else-if="!detail.owned" class="dim small">尚未拥有（先到坊市购得）</span>
+              <template v-else>
+                <span class="dim small">熟悉度需 ≥ {{ FAM_ENTRY }} 才能入池</span>
+                <!-- 已拥有且看懂、尚未入门时也能点（此前被 canEquip 挡住 → 永远点不到） -->
+                <button class="btn mini" :disabled="s.busy" @click="comprehendEntry">
+                  参悟入门（5 日）
+                </button>
+              </template>
             </div>
           </template>
 

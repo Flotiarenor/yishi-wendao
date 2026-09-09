@@ -101,11 +101,33 @@ const skillActions = computed(() => {
   return st.actions.filter((a) => !BASIC_KEYS.includes(a.key));
 });
 
-function canSubmit(a: { available: boolean }): boolean {
-  return !!b.value && a.available && !windowOpen.value && !s.busy && !b.value.ended;
+/** 该动作已排入队列的份数 */
+function queuedCount(key: string): number {
+  const st = b.value;
+  return st ? st.queue.filter((q) => q.key === key).length : 0;
 }
+
+/** 能否点击：已排的永远可点（用于撤回）；未排的需可用且窗口未满 */
+function canClickAction(a: { key: string; available: boolean }): boolean {
+  const st = b.value;
+  if (!st || st.ended || s.busy) return false;
+  if (queuedCount(a.key) > 0) return true;
+  return a.available && !windowOpen.value;
+}
+
+/** 点击动作：未排 → 排入；已排 → 撤回最后一个（再点一次即撤销，用户要求） */
 function submit(key: string) {
-  void s.battleSubmit(key);
+  const st = b.value;
+  if (!st) return;
+  let idx = -1;
+  for (let i = st.queue.length - 1; i >= 0; i--) {
+    if (st.queue[i].key === key) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx >= 0) void s.battleUnqueue(idx);
+  else void s.battleSubmit(key);
 }
 function execute() {
   void s.battleSkip();
@@ -221,17 +243,53 @@ const playerEffects = computed(() => b.value?.effects?.player || []);
         v-for="a in basicActions"
         :key="a.key"
         class="act"
-        :class="{ na: !a.available }"
-        :disabled="!canSubmit(a)"
-        :title="a.available ? a.desc : reasonText(a.reason)"
+        :class="{ na: !a.available && !queuedCount(a.key), queued: queuedCount(a.key) > 0 }"
+        :disabled="!canClickAction(a)"
+        :title="
+          queuedCount(a.key)
+            ? `点击撤回最后一个（已排 ${queuedCount(a.key)}）`
+            : a.available
+              ? a.desc
+              : reasonText(a.reason)
+        "
         @click="submit(a.key)"
       >
-        <span class="act-name">{{ a.name }}</span>
-        <span class="act-meta mono">耗灵 {{ a.qi_cost }} ｜ 后摇 {{ li(a.recovery) }}</span>
+        <span class="act-name">
+          {{ a.name }}
+          <span v-if="queuedCount(a.key)" class="q-badge">已排×{{ queuedCount(a.key) }}</span>
+        </span>
+        <span class="act-meta mono">
+          耗灵 {{ a.qi_cost }} ｜ <span class="rec">后摇 {{ li(a.recovery) }}</span>
+        </span>
       </button>
       <button class="btn primary exec" :disabled="s.busy || !b" @click="execute">
         执行本轮（{{ b.queue.length }}）
       </button>
+    </div>
+
+    <!-- ===== 队列（点条目或再点动作按钮即可撤回；不推进时间轴/不消耗资源） ===== -->
+    <div class="queue">
+      <div class="q-head">
+        <span class="dim">本轮队列（{{ b.queue.length }}）—— 点条目撤回</span>
+        <button v-if="b.queue.length" class="btn mini ghost" :disabled="s.busy" @click="clearQueue">
+          清空
+        </button>
+      </div>
+      <span v-if="!b.queue.length" class="dim">
+        （空 —— 点上方动作排入；再点同一动作即撤回）
+      </span>
+      <span
+        v-for="(q, i) in b.queue"
+        :key="i"
+        class="q-item"
+        title="点击撤回该动作"
+        @click="unqueue(i)"
+      >
+        <span class="q-no">{{ i + 1 }}</span>
+        <span>{{ q.name }}</span>
+        <span class="dim mono">耗{{ q.qi_cost }} · 止于 {{ li(q.end_t) }}息</span>
+        <span class="q-x">×</span>
+      </span>
     </div>
 
     <!-- ===== 技能（折叠） ===== -->
@@ -246,42 +304,30 @@ const playerEffects = computed(() => b.value?.effects?.player || []);
         v-for="a in skillActions"
         :key="a.key"
         class="act"
-        :class="{ na: !a.available }"
-        :disabled="!canSubmit(a)"
-        :title="a.available ? a.desc : reasonText(a.reason)"
+        :class="{ na: !a.available && !queuedCount(a.key), queued: queuedCount(a.key) > 0 }"
+        :disabled="!canClickAction(a)"
+        :title="
+          queuedCount(a.key)
+            ? `点击撤回最后一个（已排 ${queuedCount(a.key)}）`
+            : a.available
+              ? a.desc
+              : reasonText(a.reason)
+        "
         @click="submit(a.key)"
       >
-        <span class="act-name">{{ a.name }}</span>
-        <span class="act-meta mono">
-          耗灵 {{ a.qi_cost }} ｜ 前摇 {{ li(a.windup) }} ｜ 后摇 {{ li(a.recovery) }} ｜ 阶{{ a.tier }}
+        <span class="act-name">
+          {{ a.name }}
+          <span v-if="queuedCount(a.key)" class="q-badge">已排×{{ queuedCount(a.key) }}</span>
         </span>
-        <span v-if="!a.available" class="act-reason">{{ reasonText(a.reason) }}</span>
+        <span class="act-meta mono">
+          耗灵 {{ a.qi_cost }} ｜
+          <span class="wind">前摇 {{ li(a.windup) }}</span> ｜
+          <span class="rec">后摇 {{ li(a.recovery) }}</span> ｜ 阶{{ a.tier }}
+        </span>
+        <span v-if="!a.available && !queuedCount(a.key)" class="act-reason">
+          {{ reasonText(a.reason) }}
+        </span>
       </button>
-    </div>
-
-    <!-- ===== 队列（可撤回/清空，不推进时间轴、不消耗资源） ===== -->
-    <div class="queue">
-      <div class="q-head">
-        <span class="dim">本轮队列（{{ b.queue.length }}）</span>
-        <button v-if="b.queue.length" class="btn mini ghost" :disabled="s.busy" @click="clearQueue">
-          清空
-        </button>
-      </div>
-      <span v-if="!b.queue.length" class="dim">
-        （本轮队列为空 —— 点上方动作排入，或直接「执行本轮」空过）
-      </span>
-      <span v-for="(q, i) in b.queue" :key="i" class="q-item">
-        {{ i + 1 }}. {{ q.name }}
-        <span class="dim mono">耗{{ q.qi_cost }} · 止于 {{ li(q.end_t) }}息</span>
-        <button
-          class="q-undo"
-          :disabled="s.busy"
-          title="撤回该动作（不入队结算、不消耗资源）"
-          @click="unqueue(i)"
-        >
-          撤回
-        </button>
-      </span>
     </div>
 
     <template #footer>
@@ -385,18 +431,21 @@ const playerEffects = computed(() => b.value?.effects?.player || []);
 /* ---------- 队列 ---------- */
 .queue { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; margin-top: 9px; }
 .q-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.q-undo {
-  margin-left: auto;
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 4px;
+/* 前摇=暖色（等待落地，易被打断）｜后摇=冷色（冷却） */
+.wind { color: var(--gold); }
+.rec { color: #79a9ff; }
+.act.queued { border-color: var(--gold); box-shadow: inset 0 0 0 1px rgba(216, 178, 106, .35); }
+.q-badge { font-size: 10px; color: var(--gold); margin-left: 5px; }
+.q-no {
+  width: 15px;
+  text-align: center;
   color: var(--ink-dim);
-  font-size: 11.5px;
-  padding: 1px 7px;
-  cursor: pointer;
+  font-size: 11px;
 }
-.q-undo:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); }
-.q-undo:disabled { opacity: .5; cursor: not-allowed; }
+.q-x { margin-left: auto; color: var(--ink-dim); font-weight: 700; }
+.q-item { cursor: pointer; }
+.q-item:hover { border-color: var(--gold); }
+.q-item:hover .q-x { color: var(--gold); }
 .q-item {
   background: var(--panel3);
   border: 1px solid var(--line);

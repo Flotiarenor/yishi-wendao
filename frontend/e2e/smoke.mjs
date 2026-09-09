@@ -200,21 +200,22 @@ try {
       const sel2 = document.querySelector(".main-slot select");
       check("4 动作后参悟选择保持不变（不再被打回第一项）", sel2 && sel2.value === cwName, `${cwName} → ${sel2?.value}`);
       check("4 参悟目标写入 localStorage", !!dom.window.localStorage.getItem("xiuxian.cwGongfa"));
-      // 参悟入门 → 书库槽位下拉应出现且不留空（用户报"书库空白选项"回归）
-      const cwBtn = byText(".main-slot button", "参悟");
-      if (cwBtn) {
-        click(cwBtn);
-        await sleep(1200);
-        const libBtn = byText(".quick button", "书库");
-        if (libBtn) {
-          click(libBtn);
-          await sleep(600);
-          const item = document.querySelector(".main-slot .item");
-          if (item) {
-            click(item);
-            await sleep(700);
+      // 书库：熟悉度<10 也能「参悟入门」；参悟后槽位下拉出现且不留空
+      const libBtn = byText(".quick button", "书库");
+      if (libBtn) {
+        click(libBtn);
+        await sleep(600);
+        const item = document.querySelector(".main-slot .item");
+        if (item) {
+          click(item);
+          await sleep(700);
+          const entryBtn = byText(".main-slot .detail button", "参悟入门");
+          check("4 书库：熟悉度不足时也能点「参悟入门」", !!entryBtn && !entryBtn.disabled);
+          if (entryBtn && !entryBtn.disabled) {
+            click(entryBtn);
+            await sleep(1400);
             const slotSel = document.querySelector(".main-slot .detail select");
-            check("4 书库槽位下拉不留空", !!slotSel && !!slotSel.value, `value=${slotSel?.value}`);
+            check("4 参悟入门后槽位下拉出现且不留空", !!slotSel && !!slotSel.value, `value=${slotSel?.value}`);
           }
         }
       }
@@ -281,17 +282,30 @@ try {
       click(usable);
       const queued = await waitFor(() => textOf(".queue").includes("止于"), 6000);
       check("6 点动作 → 入队（显示结束时刻）", queued, textOf(".queue").slice(0, 40));
-      // 队列撤回：已排动作可撤销（不推进时间轴、不消耗资源）
-      const undo = document.querySelector(".queue .q-undo");
-      if (undo) {
-        click(undo);
+      // 再点同一动作 → 自动撤回（左键 toggle）
+      const queuedBtn = document.querySelector(".cmd-row .act.queued");
+      if (queuedBtn) {
+        click(queuedBtn);
         const cleared = await waitFor(() => !textOf(".queue").includes("止于"), 6000);
-        check("6 队列动作可撤回", cleared, textOf(".queue").slice(0, 40));
-        const usable2 = [...document.querySelectorAll(".cmd-row .act")].find((b) => !b.disabled);
-        if (usable2) {
-          click(usable2);
-          await waitFor(() => textOf(".queue").includes("止于"), 6000);
+        check("6 再点同一动作 → 自动撤回", cleared, textOf(".queue").slice(0, 40));
+      }
+      // 重新排入 → 点队列条目撤回
+      const usable2 = [...document.querySelectorAll(".cmd-row .act")].find((b) => !b.disabled);
+      if (usable2) {
+        click(usable2);
+        await waitFor(() => textOf(".queue").includes("止于"), 6000);
+        const qItem = document.querySelector(".queue .q-item");
+        if (qItem) {
+          click(qItem);
+          const cleared2 = await waitFor(() => !textOf(".queue").includes("止于"), 6000);
+          check("6 点队列条目 → 撤回", cleared2, textOf(".queue").slice(0, 40));
         }
+      }
+      // 重新排入并执行
+      const usable3 = [...document.querySelectorAll(".cmd-row .act")].find((b) => !b.disabled);
+      if (usable3) {
+        click(usable3);
+        await waitFor(() => textOf(".queue").includes("止于"), 6000);
       }
       const exec = byText(".cmd-row button", "执行本轮");
       if (exec) {
