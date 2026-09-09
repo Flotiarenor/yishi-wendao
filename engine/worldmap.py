@@ -220,7 +220,9 @@ def fbm(seed: int, x: float, y: float, base_period: float, octaves: int,
 
 # ============ 连续地形采样（P4-T2-R1：地形真相 = 纯函数，零存储） ============
 # 定案 §3.5：全局只物化稀疏特征（河/路/城/灵脉），**地形一律按需采样**。
-_SLOPE_EPS = _CELL_LI     # 坡度采样半径（里）——与首版"格心 ±1 格"同尺度，保证峡谷分布不漂移
+_SLOPE_EPS = 100.0        # 坡度采样半径（里）——**固定 100 里**（与格宽解耦，保证峡谷分布不随格宽漂移）
+# 内容点密度按**面积**归一：格变小 → 每格命中概率等比缩小，世界内容总量不随格宽膨胀
+_DENSITY_SCALE = (_CELL_LI / 100.0) ** 2
 _SLOPE_OFFS = ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
                (1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0))
 
@@ -1409,9 +1411,11 @@ class WorldMap:
         dens = {}
         for k in kinds:
             d = R.CONTENT_KINDS[k]["density"]
-            dens[k] = (d["core"], d["near"], d["outer"])
+            dens[k] = (d["core"] * _DENSITY_SCALE, d["near"] * _DENSITY_SCALE,
+                       d["outer"] * _DENSITY_SCALE)
         vein_dens = R.CONTENT_KINDS["vein"]["density"]
-        vein_dens_t = (vein_dens["core"], vein_dens["near"], vein_dens["outer"])
+        vein_dens_t = (vein_dens["core"] * _DENSITY_SCALE, vein_dens["near"] * _DENSITY_SCALE,
+                       vein_dens["outer"] * _DENSITY_SCALE)
         vein_terrain = (_T_MOUNTAIN, _T_HILL, _T_CANYON)
 
         cands = []
