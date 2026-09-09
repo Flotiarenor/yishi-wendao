@@ -100,6 +100,27 @@ _MAIN_TOWN = R.MAIN_TOWN_NAME
 _SEQ_W = R.CONTENT_POINT_ID_SEQ_WIDTH
 _CN_ORDINALS = ("二", "三", "四", "五", "六", "七", "八", "九", "十")
 
+# 路宽（里，定案 §4.4）：真实路面 + **独立**判定容差
+_ROAD_WIDTH = 0.02        # 官道 10 m
+_TRAIL_WIDTH = 0.004      # 小径 2 m
+_ROAD_TOL = 0.05          # 官道判定容差 25 m
+_TRAIL_TOL = 0.02         # 小径判定容差 10 m
+
+
+def _dist_point_seg(px: float, py: float, ax: float, ay: float,
+                    bx: float, by: float) -> float:
+    """点到线段的最短距离（里）。"""
+    dx = bx - ax
+    dy = by - ay
+    if dx == 0.0 and dy == 0.0:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+    if t < 0.0:
+        t = 0.0
+    elif t > 1.0:
+        t = 1.0
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
 
 # ============ 稳定哈希与噪声（参考实现，跨实现可复现） ============
 @functools.lru_cache(maxsize=8192)
@@ -369,13 +390,15 @@ class River:
 
 @dataclass(frozen=True)
 class Road:
-    """一段路（A* 最小代价路径落格而成，非手画）。"""
+    """一段路（A* 最小代价路径 = **图上的边**；宽度见定案 §4.4）。"""
     kind: str            # "road"（跨域主路 / 域主城相连）/ "trail"（域内支路）
     points: tuple
-    cells: tuple
+    cells: tuple         # 降采样格序列（**仅供调试 / ASCII**，不作地形真相）
     length_li: float
     a: str
     b: str
+    width_li: float = _ROAD_WIDTH    # 真实路面（里）
+    tol_li: float = _ROAD_TOL        # 判定容差（里）
 
 
 @dataclass
@@ -558,6 +581,7 @@ class WorldMap:
         self.world_seed = int(world_seed)
         self._base = None            # bytearray 基础地形（**生成用真相**；查询经 `_cell_terrain` 判定）
         self._cell_tcache = {}       # idx → 特征地形 id（>0）或 -1（=纯噪声，走连续采样）
+        self._road_idx = None        # 路网线段空间索引（100 里格分桶）——几何判定用
         self._elev = None            # list[float] 高程场（城镇评分用）
         self._wards = None           # tuple[(x, y, r), ...]
         self._rivers = None          # tuple[River, ...]
@@ -702,11 +726,15 @@ class WorldMap:
         idx = cy * _N + cx
         if with_roads:
             t = self._road_cells.get(idx)
-            if t is not None:
+            if t == _T_FORD:          # 渡口按格；路网走几何判定（真实宽度 0.02 里）
                 return t
         t = self._town_cells.get(idx)
         if t is not None:
             return t
+        if with_roads:
+            t = self._road_at(x, y)
+            if t:
+                return t
         t = self._cell_terrain(cx, cy)
         if t > 0:
             return t
@@ -721,15 +749,20 @@ class WorldMap:
         idx = cy * _N + cx
         if with_roads:
             t = self._road_cells.get(idx)
-            if t is not None:
+            if t == _T_FORD:          # 渡口仍按格（过河点），其余路网走几何判定
                 return t
         t = self._town_cells.get(idx)
         if t is not None:
             return t
+        x, y = center_of(cx, cy)
+        if with_roads:
+            t = self._road_at(x, y)
+            if t:
+                return t
         t = self._cell_terrain(cx, cy)
         if t > 0:
             return t
-        return classify_point(self.world_seed, *center_of(cx, cy))
+        return classify_point(self.world_seed, x, y)
 
     # ---------- 惰性生成入口 ----------
     def _ensure_terrain(self):
@@ -754,6 +787,42 @@ class WorldMap:
             return
         self._ensure_towns()
         self._build_roads()
+        self._build_road_index()
+
+    def _build_road_index(self):
+        """把路网折线按 100 里格分桶（线段注册到其覆盖的格），供几何判定 O(1) 查询。"""
+        idx = {}
+        for rd in (self._roads or ()):
+            tol = rd.tol_li
+            pts = rd.points
+            for k in range(1, len(pts)):
+                ax, ay = pts[k - 1]
+                bx, by = pts[k]
+                c0x, c0y = cell_of(min(ax, bx) - tol, min(ay, by) - tol)
+                c1x, c1y = cell_of(max(ax, bx) + tol, max(ay, by) + tol)
+                seg = (ax, ay, bx, by, tol,
+                       _T_ROAD if rd.kind == "road" else _T_TRAIL)
+                for cy in range(c0y, c1y + 1):
+                    for cx in range(c0x, c1x + 1):
+                        idx.setdefault(cy * _N + cx, []).append(seg)
+        self._road_idx = idx
+
+    def _road_at(self, x: float, y: float) -> int:
+        """几何判定：该点是否在路面判定容差内。返回 T_ROAD / T_TRAIL，否则 0。
+
+        **不看格**——路宽 0.02 里（10 m），与格宽（100 里）相差 5000 倍，
+        用格表达不了（定案 §4.4）。
+        """
+        if self._road_idx is None:
+            self._build_road_index()
+        cx, cy = cell_of(x, y)
+        segs = self._road_idx.get(cy * _N + cx)
+        if not segs:
+            return 0
+        for ax, ay, bx, by, tol, tid in segs:
+            if _dist_point_seg(x, y, ax, ay, bx, by) <= tol:
+                return tid
+        return 0
 
     def _ensure_points(self):
         if self._points is not None:
@@ -1329,7 +1398,9 @@ class WorldMap:
                 continue
             pts = tuple(center_of(cx, cy) for cx, cy in fine)
             roads.append(Road(kind=kind, points=pts, cells=tuple(fine),
-                              length_li=_polyline_li(pts), a=a.id, b=b.id))
+                              length_li=_polyline_li(pts), a=a.id, b=b.id,
+                              width_li=_ROAD_WIDTH if kind == "road" else _TRAIL_WIDTH,
+                              tol_li=_ROAD_TOL if kind == "road" else _TRAIL_TOL))
         # 收尾不变式：Road.cells 的每一格都必须有路/小径/渡口标记
         # （细格兜底路径可能带入未落格的格；T6 逐格取色依赖这条）
         # 例外：5 个旧地点锚点格刻意保持 T_PLAIN/T_ROAD（不落路网覆盖），跳过。

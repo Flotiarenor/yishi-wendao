@@ -860,5 +860,24 @@ _feat = sum(1 for _i in range(200 * 200)
 check("K72 特征格（河/湖/禁制/边界/锚点）占比 < 15%",
       _feat / (200 * 200) < 0.15, f"{_feat / (200 * 200) * 100:.2f}%")
 
+# ============ L. 路网几何化（P4-T2-R2） ============
+print("\n== L 路网几何化（真实宽度 + 独立判定容差） ==")
+_rd = WMAP.roads()[0]
+_ax, _ay = _rd.points[0]
+_bx, _by = _rd.points[1]
+_mx, _my = (_ax + _bx) / 2.0, (_ay + _by) / 2.0
+_dx, _dy = _bx - _ax, _by - _ay
+_len = (_dx * _dx + _dy * _dy) ** 0.5
+_nx, _ny = -_dy / _len, _dx / _len          # 法线方向
+_on = WMAP.terrain_at(_mx + _nx * (_rd.tol_li * 0.6), _my + _ny * (_rd.tol_li * 0.6))
+_off = WMAP.terrain_at(_mx + _nx * 1.0, _my + _ny * 1.0)
+check("L73 路中线 0.6×容差内 → 判为路",
+      _on in (R.T_ROAD, R.T_TRAIL, R.T_FORD), str(_on))
+check("L74 路中线外 1 里 → 不再是路（此前整格 100 里都是路）",
+      _off not in (R.T_ROAD, R.T_TRAIL), str(_off))
+check("L75 路宽为真实尺度（≤0.02 里 = 10 m），判定容差独立且更宽",
+      _rd.width_li <= 0.02 and _rd.tol_li >= _rd.width_li * 2.0,
+      f"width={_rd.width_li} tol={_rd.tol_li}")
+
 print(f"\n== 结果：{_PASS} 过 / {_FAIL} 败 ==")
 sys.exit(1 if _FAIL else 0)
