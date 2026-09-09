@@ -11,3 +11,4 @@ logs/
 .idea/
 Thumbs.db
 desktop.ini
+python虚拟环境管理脚本.ps1
