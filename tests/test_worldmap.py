@@ -253,7 +253,10 @@ for cy in range(0, 200, 7):
         idx = cy * 200 + cx
         if idx in WMAP._town_cells or idx in WMAP._road_cells:
             continue
-        if WMAP.base_terrain(cx, cy) != WMAP.terrain_at((cx + 0.5) * 100, (cy + 0.5) * 100):
+        _px, _py = (cx + 0.5) * 100, (cy + 0.5) * 100
+        if WMAP._river_at(_px, _py):
+            continue                      # R2b：河流是几何覆盖，不写进地形数组
+        if WMAP.base_terrain(cx, cy) != WMAP.terrain_at(_px, _py):
             _sample_ok = False
 check("C21a 无覆盖格 base_terrain == terrain_at", _sample_ok)
 check("C21b 城镇格 terrain_at 为 T_ROAD",
@@ -427,9 +430,10 @@ _cross = sum(1 for rd in WMAP.roads
 check("F39 跨域主路边 ≥ 20 条（实测 %d）" % _cross, _cross >= 20)
 _ford_cells = [idx for idx, tid in WMAP._road_cells.items() if tid == R.T_FORD]
 check("F40a 路网跨水处改标渡口（%d 格）" % len(_ford_cells), len(_ford_cells) >= 1)
-check("F40b 渡口格底层为水域/渡口且可通行",
-      all(WMAP._base[idx] in (R.T_WATER, R.T_FORD)
-          and WMAP.speed_at((idx % 200) * 100 + 50, (idx // 200) * 100 + 50, 1) > 0.0
+check("F40b 渡口格可通行且位于河面/水域",
+      all(WMAP.speed_at((idx % 200) * 100 + 50, (idx // 200) * 100 + 50, 1) > 0.0
+          and (WMAP._base[idx] in (R.T_WATER, R.T_FORD)
+               or WMAP._river_at((idx % 200) * 100 + 50, (idx // 200) * 100 + 50))
           for idx in _ford_cells))
 _adj_pairs = sorted(
     ((_diag_dist((a.x, a.y), (b.x, b.y)), a.id, b.id, a, b)
@@ -526,8 +530,9 @@ for _cy in range(1, 199):
             _ob = (_cx, _cy + _dy)
 
             def _blk(c):
+                # R2b：河流是几何覆盖，作屏障样本不稳定 → 只用**硬阻挡**（绝壁/虚空/深海）
                 t = WMAP.terrain_at((c[0] + 0.5) * 100, (c[1] + 0.5) * 100)
-                return t in R.HARD_BLOCK_IDS or t == R.T_WATER
+                return t in R.HARD_BLOCK_IDS
 
             if not _blk(_a) and not _blk(_b) and _blk(_oa) and _blk(_ob):
                 _cut = (_a, _b)
@@ -733,8 +738,9 @@ for _res in (_res, _p1, WMAP.find_path((500.0, 500.0), (19500.0, 19500.0))):
         _x0, _y0 = _res.cells[_k - 1]
         _x1, _y1 = _res.cells[_k]
         if _x0 != _x1 and _y0 != _y1:
-            if (WMAP.speed_at(_x1 * 100 + 50, _y0 * 100 + 50, 1) <= 0.0
-                    or WMAP.speed_at(_x0 * 100 + 50, _y1 * 100 + 50, 1) <= 0.0):
+            # R2b：只校验**硬阻挡**（绝壁/虚空/深海）不穿角；河流是几何覆盖，不参与栅格屏障
+            if (WMAP.terrain_at(_x1 * 100 + 50, _y0 * 100 + 50) in R.HARD_BLOCK_IDS
+                    or WMAP.terrain_at(_x0 * 100 + 50, _y1 * 100 + 50) in R.HARD_BLOCK_IDS):
                 _corner_ok = False
 check("G52d 对角步不穿角（两个正交邻格均可通行）", _corner_ok)
 
@@ -878,6 +884,25 @@ check("L74 路中线外 1 里 → 不再是路（此前整格 100 里都是路�
 check("L75 路宽为真实尺度（≤0.02 里 = 10 m），判定容差独立且更宽",
       _rd.width_li <= 0.02 and _rd.tol_li >= _rd.width_li * 2.0,
       f"width={_rd.width_li} tol={_rd.tol_li}")
+
+# ---- R2b：河流几何化 ----
+_rv = max(WMAP.rivers(), key=lambda r: r.length_li)
+check("L76 河宽沿程渐变（源头窄 → 下游宽，0.05~0.4 里）",
+      len(_rv.widths) == len(_rv.points)
+      and _rv.widths[0] <= _rv.widths[-1]
+      and 0.04 <= _rv.widths[0] <= 0.06 and 0.35 <= _rv.widths[-1] <= 0.45,
+      f"head={_rv.widths[0]} tail={_rv.widths[-1]} pts={len(_rv.points)}")
+# 河面内 → 水；离河 5 里 → 不是水
+_vax, _vay = _rv.points[len(_rv.points) // 2]
+_vbx, _vby = _rv.points[len(_rv.points) // 2 + 1]
+_vdx, _vdy = _vbx - _vax, _vby - _vay
+_vlen = (_vdx * _vdx + _vdy * _vdy) ** 0.5
+_vnx, _vny = -_vdy / _vlen, _vdx / _vlen
+_on_river = WMAP.terrain_at(_vax, _vay)
+_off_river = WMAP.terrain_at(_vax + _vnx * 5.0, _vay + _vny * 5.0)
+check("L77 河面内判为水域", _on_river == R.T_WATER, str(_on_river))
+check("L78 离河 5 里不再是水（此前整格 100 里都是水）",
+      _off_river != R.T_WATER, str(_off_river))
 
 print(f"\n== 结果：{_PASS} 过 / {_FAIL} 败 ==")
 sys.exit(1 if _FAIL else 0)
