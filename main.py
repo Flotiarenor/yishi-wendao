@@ -62,6 +62,7 @@ def _run_tests(argv):
     py = sys.executable
     targets = [
         ("统一时间刻度单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_time.py")]),
+        ("世界地图内核单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_worldmap.py")]),
         ("效果系统单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_effects.py")]),
         ("引擎加固单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_hardening.py")]),
         ("时间轴/规则单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_clock.py")]),

@@ -176,3 +176,42 @@ SHENFA_SLOTS = 1           # 运转池·身法槽（设计 1~2，P3 取 1）
 # 每日恢复量固定为 60，换算成"每息"即 60 / 43200 —— 与旧口径等价，但支持亚日推进。
 QI_REGEN_PER_DAY = 60.0                            # 战斗外每日灵气恢复量（占位）
 QI_REGEN_PER_SI = QI_REGEN_PER_DAY / SI_PER_DAY    # ≈ 0.0013889 / 息
+
+# ---------- P4-T2 世界地图（机制常量；地形/域数据在 content/regions.py）----------
+WORLD_LI = 20000.0          # 世界跨度（里），见方
+DOMAIN_GRID = 5             # 5×5 = 25 域
+DOMAIN_LI = 4000.0          # 每域边长（里）
+WORLD_CELL_LI = 100.0       # 内部寻路/生成栅格（里）——"格"只是加速结构，不是设计概念
+WORLD_CELLS = 200           # 每轴格数 = WORLD_LI / WORLD_CELL_LI
+ROAD_PLAN_MULT = 2          # 路网规划用 2×2 格 = 200 里 的粗栅格
+
+REALM_SPEED_MULT = (1.0, 1.5, 2.5, 4.0, 6.0)   # 练气/筑基/金丹/元婴/化神（定案 §4.1）
+FLY_SPEED_LI_PER_DAY = 250.0                   # 飞行速度（定案 §4.3）
+FLY_MIN_REALM = 14                             # 金丹·初期起可飞
+SWIM_MIN_REALM = 10                            # 筑基·初期起可渡水
+VISION_RADIUS_LI = (60.0, 150.0, 400.0, 1000.0, 2500.0)   # 神识半径：练气/筑基/金丹/元婴/化神
+MAP_LEVELS = ("none", "coarse", "detail")      # 无舆图 / 粗舆图 / 详图（T4 用）
+WORLD_CACHE_SIZE = 4                           # WorldMap 实例缓存条数（同种子复用）
+
+
+def major_realm_of(realm_idx: int) -> int:
+    """档号 1..25 → 大境界下标 0..4（1-9 练气、10-13 筑基、14-17 金丹、18-21 元婴、22-25 化神）。"""
+    r = int(realm_idx)
+    if r < 1:
+        r = 1
+    elif r > MAX_REALM:
+        r = MAX_REALM
+    for i in range(len(MAJOR_REALM_STARTS) - 1, -1, -1):
+        if r >= MAJOR_REALM_STARTS[i]:
+            return i
+    return 0
+
+
+def realm_speed_mult(realm_idx: int) -> float:
+    """境界速度系数（里/日 的乘区）：练气 1.0 → 化神 6.0。"""
+    return REALM_SPEED_MULT[major_realm_of(realm_idx)]
+
+
+def vision_radius_li(realm_idx: int) -> float:
+    """神识半径（里）：练气 60 → 化神 2500。"""
+    return VISION_RADIUS_LI[major_realm_of(realm_idx)]
