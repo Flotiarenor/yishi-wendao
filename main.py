@@ -25,7 +25,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-USAGE = """仙途 · 文字修仙 —— 统一入口
+USAGE = """一世问道 · 文字修仙 —— 统一入口
 
   python main.py                  起 Web 壳（默认，浏览器打开 http://127.0.0.1:8044）
   python main.py web [--port N]   同上（可指定端口）

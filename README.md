@@ -1,4 +1,4 @@
-# 修仙文字游戏（working title）
+# 一世问道 · 文字修仙
 
 Python 单机文字修仙游戏。终端可玩，纯规则引擎 + 确定性随机，**运行时零 AI**。
 
@@ -10,7 +10,7 @@ Python 单机文字修仙游戏。终端可玩，纯规则引擎 + 确定性随�
 ## 运行
 
 ```powershell
-cd D:\project\Python\game
+cd D:\project\Python\yishi-wendao
 .venv\Scripts\python.exe -X utf8 main.py            # 统一入口：起 Web 壳（浏览器玩）
 .venv\Scripts\python.exe -X utf8 main.py web --port 8000   # 覆盖默认端口（默认 8044）
 .venv\Scripts\python.exe -X utf8 main.py smoke --lives 20  # 自动 bot 回归（记录分布/战斗统计）

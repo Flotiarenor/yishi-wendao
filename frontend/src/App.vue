@@ -80,7 +80,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
 <template>
   <header class="topbar">
-    <h1>仙途 · 文字修仙</h1>
+    <h1>一世问道 · 文字修仙</h1>
     <div class="top-right">
       <span v-if="s.busy" class="badge busy">处理中…</span>
       <span class="badge">{{ runLabel }}</span>
