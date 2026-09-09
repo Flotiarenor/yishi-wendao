@@ -304,5 +304,20 @@ check("撤回后可再排入", ok3, reason3)
 b.clear_queue()
 check("clear_queue 清空", b.state()["queue"] == [])
 
+# 队列项带 start_t/land_t（时间轴据此把前摇/后摇分段上色）
+from engine.clock import recovery_li as _rec_li, windup_li as _wind_li  # noqa: E402
+b = make(extra_actions=(SLOW_BIG,))
+b.submit("slow_big")
+q = b.state()["queue"][0]
+spd = b.p.effective_speed()
+check("队列项含 start_t/land_t/end_t",
+      all(k in q for k in ("start_t", "land_t", "end_t")), str(q))
+check("land_t = start_t + 实际前摇（吃速度）",
+      q["land_t"] - q["start_t"] == _wind_li(SLOW_BIG.timing, spd),
+      f"{q['land_t'] - q['start_t']} vs {_wind_li(SLOW_BIG.timing, spd)}")
+check("end_t = land_t + 实际后摇",
+      q["end_t"] - q["land_t"] == _rec_li(SLOW_BIG.timing, spd),
+      f"{q['end_t'] - q['land_t']} vs {_rec_li(SLOW_BIG.timing, spd)}")
+
 print(f"\n== 结果：{_PASS} 过 / {_FAIL} 败 ==")
 sys.exit(1 if _FAIL else 0)

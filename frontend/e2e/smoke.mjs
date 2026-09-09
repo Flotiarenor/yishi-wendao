@@ -282,6 +282,11 @@ try {
       click(usable);
       const queued = await waitFor(() => textOf(".queue").includes("止于"), 6000);
       check("6 点动作 → 入队（显示结束时刻）", queued, textOf(".queue").slice(0, 40));
+      check(
+        "6 时间轴队列条分前摇/后摇两段",
+        !!document.querySelector(".tl-act .tl-wind") && !!document.querySelector(".tl-act .tl-rec"),
+        textOf(".tl-track").slice(0, 40),
+      );
       // 再点同一动作 → 自动撤回（左键 toggle）
       const queuedBtn = document.querySelector(".cmd-row .act.queued");
       if (queuedBtn) {

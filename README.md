@@ -79,8 +79,8 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
   `engine/battle.py` 时间轴战斗（决策窗口 + 队列 + 敌方插入 + 统一灵兽进攻）+
   `content/actions.py` 动作数据化 + `tools/dummy.py` 木桩；CLI 下线（存档 I/O 迁 `server/`）。
   基线：`test_effects` 39 + `test_hardening` 75 + `test_clock` 59 + `test_action` 53 +
-  `test_battle_time` 42 + `test_gongfa_deep` 91 + `test_server` 83 = **442 项**
-  （+ `test_content_tools` 32 + `test_replay` 16 = **490 项**）；
+  `test_battle_time` 45 + `test_gongfa_deep` 91 + `test_server` 83 = **445 项**
+  （+ `test_content_tools` 32 + `test_replay` 16 = **493 项**）；
   smoke 20 局 = **19 通关/1 道陨、425 场、平均终档 24.4**
 - ✅ **P4-R4** 状态效果补全（**修复 R3 回归**）：新增 `engine/status.py` 行为注册表
   （damage_mult / hit_negate / push_back / speed_mult 四类，倍率取 `ApplyStatus.params`）——
@@ -125,6 +125,10 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
 - ✅ **P4-R11** 默认端口改 **8044**（2026-09-10，用户偏好）：`server/main.py` `--port` 默认
   8000→8044（`--port` 仍可覆盖）；根 `main.py` 用法提示同步；`frontend/vite.config.ts` 开发代理
   默认指向 8044（环境变量 `XIUXIAN_BACKEND` 可覆盖）；`test_server` 83（+2 默认端口/覆盖）。
+- ✅ **P4-R12** 时间轴队列条按前摇/后摇分段上色（2026-09-10，用户指出 `.tl-queue` 仍整根蓝）：
+  `Battle.state().queue[]` 增 `start_t`/`land_t`（按**有效速度**算实际前摇），前端把队列条拆成
+  **前摇段（暖金）+ 后摇段（冷蓝）**，分界 = 效果落地时刻；`test_battle_time` 45（+3）、
+  前端 E2E 32（+1）。
 - ✅ **P3.7** 正式前端（Vue3 + Vite + Pinia + TS，`frontend/`）：FastAPI 伺服 `frontend/dist`（SPA fallback，`/api` 404 不被吞）；布局 = **左状态（含切换按钮）/ 中上主内容（地图为主页面）/ 中下叙事日志（可拖拽高度）**，遇敌时**战斗临时接管主内容区**（时间轴 / 决策窗口 / 队列入队-执行 / 双方效果 / 动作可用性，常用动作在上、技能折叠）+ **修炼页**（闭关/参悟/突破/静养，参悟选择记忆）+ 坊市（灵石/背包/购买数量/买不起置灰）+ 书库（详情/装备/卸下）+ 编年史时间线 + 状态面板（五行亲和/业力）；旧 P3.6 极简面板删除（`server/static`）；顺带修复 `gongfa_detail` 对 7/12 功法抛 500 的 `SkillSpec.element` bug；`tests/test_server.py` 79 项 + 前端 E2E 27 项
 - ⬜ **P4 起未做**（详见 `docs/实现路线图.md`）：突破考验（P4）、五行宝光（P5）、死亡转世（P6）、人物势力（P7）、事件化（P8）、生成器（P9）、平衡标定（P10）、pywebview 桌面壳
 - ✅ **工具链（2026-09-10）**：`tools/content_check.py` 内容校验器（当前 0 错误 / 10 警告，

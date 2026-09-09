@@ -91,6 +91,10 @@ export interface BattleQueueItem {
   key: string;
   name: string;
   qi_cost: number;
+  /** 该动作开始时刻（厘息） */
+  start_t?: number;
+  /** 效果落地时刻（厘息，= 开始 + 实际前摇） */
+  land_t?: number;
   /** 该动作结束时刻（厘息） */
   end_t: number;
 }

@@ -67,21 +67,38 @@ function pos(t: number | undefined): string {
   return p.toFixed(2) + "%";
 }
 
-const queueBars = computed(() => {
+interface QueueBar {
+  key: string;
+  name: string;
+  left: string;
+  width: string;
+  /** 前摇占整条的比例（0~100） */
+  windPct: number;
+}
+
+/** 时间轴上的队列条：**前摇段（暖金）+ 后摇段（冷蓝）** */
+const queueBars = computed<QueueBar[]>(() => {
   const st = b.value;
   if (!st) return [];
-  const out: { key: string; name: string; left: string; width: string }[] = [];
+  const { t0, t1 } = axis.value;
+  const span = t1 - t0 || 1;
+  const out: QueueBar[] = [];
   let prev = st.t;
   for (const q of st.queue) {
-    const left = ((prev - axis.value.t0) / (axis.value.t1 - axis.value.t0 || 1)) * 100;
-    const width = ((q.end_t - prev) / (axis.value.t1 - axis.value.t0 || 1)) * 100;
+    const start = q.start_t ?? prev;
+    const land = q.land_t ?? q.end_t;
+    const end = q.end_t;
+    const total = Math.max(1, end - start);
+    const left = ((start - t0) / span) * 100;
+    const width = ((end - start) / span) * 100;
     out.push({
-      key: q.key + q.end_t,
+      key: q.key + end,
       name: q.name,
       left: left.toFixed(2) + "%",
       width: Math.max(width, 0.6).toFixed(2) + "%",
+      windPct: Math.max(0, Math.min(100, ((land - start) / total) * 100)),
     });
-    prev = q.end_t;
+    prev = end;
   }
   return out;
 });
@@ -222,10 +239,13 @@ const playerEffects = computed(() => b.value?.effects?.player || []);
         <div
           v-for="q in queueBars"
           :key="q.key"
-          class="tl-queue"
+          class="tl-act"
           :style="{ left: q.left, width: q.width }"
+          :title="`${q.name}（前摇 ${q.windPct.toFixed(0)}% / 后摇 ${(100 - q.windPct).toFixed(0)}%）`"
         >
-          {{ q.name }}
+          <span class="tl-wind" :style="{ width: q.windPct + '%' }"></span>
+          <span class="tl-rec" :style="{ width: 100 - q.windPct + '%' }"></span>
+          <span class="tl-act-name">{{ q.name }}</span>
         </div>
         <div class="tl-mark player" :style="{ left: pos(b.player_next_t) }" title="我方下次可动">我</div>
         <div class="tl-mark enemy" :style="{ left: pos(b.enemy_next_t) }" title="敌方下次出手">敌</div>
@@ -372,19 +392,27 @@ const playerEffects = computed(() => b.value?.effects?.player || []);
   background: rgba(121, 169, 255, .10);
   border-right: 1px dashed rgba(121, 169, 255, .5);
 }
-.tl-queue {
+/* 队列条：前摇暖金 + 后摇冷蓝（同一根条按落地时刻切开） */
+.tl-act {
   position: absolute;
   top: 5px;
   height: 21px;
-  background: linear-gradient(90deg, #2c4a7a, #4a7bd8);
-  border: 1px solid #6f9dff;
   border-radius: 4px;
-  color: #eaf1ff;
-  font-size: 11px;
-  line-height: 19px;
-  padding: 0 4px;
   overflow: hidden;
-  white-space: nowrap;
+  display: flex;
+  box-shadow: 0 0 0 1px rgba(111, 157, 255, .55);
+}
+.tl-wind { background: linear-gradient(180deg, #c08a34, #8a6220); }
+.tl-rec { background: linear-gradient(180deg, #4a7bd8, #2c4a7a); }
+.tl-act-name {
+  position: absolute;
+  inset: 0;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 21px;
+  color: #eaf1ff;
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
 }
 .tl-mark {
   position: absolute;

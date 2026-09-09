@@ -27,7 +27,7 @@ from engine import status as ST
 from engine.action import (Action, Actor, ActionOutcome, PendingAction, begin,
                            cancel, can_execute, land)
 from engine.clock import (SIDE_ENEMY, SIDE_PLAYER, Clock, Timing, recovery_li,
-                          total_li)
+                          total_li, windup_li)
 
 # 战斗结局
 BATTLE_WIN = "win"
@@ -190,14 +190,17 @@ class Battle:
         """结构化快照（前端唯一数据源）。"""
         q = []
         acc = self.clock.t
+        spd = self.p.effective_speed()
         for key in self.queue:
             a = self.actions.get(key)
             if a is None:
                 continue
-            from engine.clock import total_li
-            acc += total_li(a.timing, self.p.effective_speed())
+            w = windup_li(a.timing, spd)
+            start = acc
+            acc += w + recovery_li(a.timing, spd)
             q.append({"idx": len(q), "key": key, "name": a.display(),
-                      "qi_cost": a.qi_cost, "end_t": acc})
+                      "qi_cost": a.qi_cost, "start_t": start,
+                      "land_t": start + w, "end_t": acc})
         return {
             "t": self.clock.t,
             "enemy": {"id": self.enemy.id, "name": self.e.name,
