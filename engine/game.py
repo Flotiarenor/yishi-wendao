@@ -558,7 +558,8 @@ class Game:
             return _reject(r, R_GAME_OVER, "你已身死道消，本世已终。")
         # 战斗中：只允许战斗指令（status 可查看含战况）
         if self._active_battle is not None and action not in (
-                "battle_action", "battle_submit", "battle_skip", "status"):
+                "battle_action", "battle_submit", "battle_skip",
+                "battle_unqueue", "battle_clear", "status"):
             b = self._active_battle
             return _reject(
                 r, R_IN_BATTLE,
@@ -611,6 +612,10 @@ class Game:
             r = self._battle_submit(str(kw.get("key", "") or kw.get("cmd", "")))
         elif action == "battle_skip":
             r = self._battle_skip()
+        elif action == "battle_unqueue":
+            r = self._battle_unqueue(kw.get("index", -1))
+        elif action == "battle_clear":
+            r = self._battle_clear()
         elif action == "battle_action":
             return self._battle_action(str(kw.get("cmd", "")), kw.get("skill_id"))
         else:
@@ -1415,6 +1420,29 @@ class Game:
             return _reject(r, R_NOT_IN_BATTLE, "当前不在战斗中。")
         return self._battle_advance(r)
 
+    def _battle_unqueue(self, index) -> Result:
+        """撤回队列中第 index 个动作（不推进时间轴、不消耗资源）。"""
+        r = Result()
+        if self._active_battle is None:
+            return _reject(r, R_NOT_IN_BATTLE, "当前不在战斗中。")
+        b = self._active_battle
+        ok, reason = b.unqueue(_as_int(index, -1))
+        if not ok:
+            return _reject(r, reason, "撤回失败（队列序号无效）。")
+        return _accept(r, "已撤回一个动作。",
+                       {"queue": b.state()["queue"], "battle": self._battle_data()})
+
+    def _battle_clear(self) -> Result:
+        """清空本轮队列（不推进时间轴、不消耗资源）。"""
+        r = Result()
+        if self._active_battle is None:
+            return _reject(r, R_NOT_IN_BATTLE, "当前不在战斗中。")
+        b = self._active_battle
+        n = len(b.queue)
+        b.clear_queue()
+        return _accept(r, f"已清空本轮队列（{n} 个动作）。",
+                       {"queue": [], "battle": self._battle_data()})
+
     def _battle_advance(self, r: Result) -> Result:
         """执行窗口 + 结束结算（submit/skip 与兼容别名共用）。"""
         b = self._active_battle
@@ -1465,10 +1493,11 @@ class Game:
         p = self.state.player
         e = b.enemy
         tail = []
-        # 0) 先把战斗内的资源变动同步回世界层（战斗中"购灵加速"会扣 b.p.stones），
-        #    再做胜负结算——否则战利品会被这次同步覆盖（历史 bug：每场战斗后灵石归零）。
+        # 0) 把战斗内的消耗同步回世界层：**增量扣款**（只扣战斗内花掉的，不整体覆盖），
+        #    这样胜负奖励加进来不会被抹掉（P4-R5；b.stones0 = 开战时的灵石）。
         p.qi = max(0.0, min(b.p.qi, BTL.battle_stats(p.realm_idx)["qi_max"]))
-        p.spirit_stones = max(0, int(b.p.stones))
+        spent = max(0, int(getattr(b, "stones0", p.spirit_stones)) - int(b.p.stones))
+        p.spirit_stones = max(0, p.spirit_stones - spent)
         if outcome == BTL.BATTLE_WIN:
             lo, hi = e.loot_stones
             stones = self.rng.randint(lo, hi, f"battle_loot_stone_{e.id}")

@@ -388,6 +388,12 @@ export const useSessionStore = defineStore("session", {
     battleSubmit(key: string): Promise<StepResult | null> {
       return this.run(...actions.battleSubmit(key));
     },
+    battleUnqueue(index: number): Promise<StepResult | null> {
+      return this.run(...actions.battleUnqueue(index));
+    },
+    battleClear(): Promise<StepResult | null> {
+      return this.run(...actions.battleClear());
+    },
     battleSkip(): Promise<StepResult | null> {
       return this.run(...actions.battleSkip());
     },

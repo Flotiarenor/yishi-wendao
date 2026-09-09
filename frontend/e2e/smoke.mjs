@@ -263,6 +263,18 @@ try {
       click(usable);
       const queued = await waitFor(() => textOf(".queue").includes("止于"), 6000);
       check("6 点动作 → 入队（显示结束时刻）", queued, textOf(".queue").slice(0, 40));
+      // 队列撤回：已排动作可撤销（不推进时间轴、不消耗资源）
+      const undo = document.querySelector(".queue .q-undo");
+      if (undo) {
+        click(undo);
+        const cleared = await waitFor(() => !textOf(".queue").includes("止于"), 6000);
+        check("6 队列动作可撤回", cleared, textOf(".queue").slice(0, 40));
+        const usable2 = [...document.querySelectorAll(".cmd-row .act")].find((b) => !b.disabled);
+        if (usable2) {
+          click(usable2);
+          await waitFor(() => textOf(".queue").includes("止于"), 6000);
+        }
+      }
       const exec = byText(".cmd-row button", "执行本轮");
       if (exec) {
         const tBefore = textOf(".tl-foot");

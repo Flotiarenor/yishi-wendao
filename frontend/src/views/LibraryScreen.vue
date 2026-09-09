@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 import EmbeddedPanel from "@/components/EmbeddedPanel.vue";
 import type { GongfaDetail } from "@/types/contract";
@@ -25,6 +25,17 @@ const slotOptions = computed(() => {
   if (d.slot_type === "shenfa") return [{ value: "shenfa", label: "身法槽" }];
   return [{ value: "main", label: "主修位" }];
 });
+
+// 槽位下拉始终选中一个有效项：单一选项直接选中，多选项默认第一项
+// （避免"显示第一项、实际值为旧槽位"的不一致，也免去用户重复点选）
+watch(
+  slotOptions,
+  (opts) => {
+    if (!opts.length) return;
+    if (!opts.some((o) => o.value === selSlot.value)) selSlot.value = opts[0].value;
+  },
+  { immediate: true },
+);
 
 const canEquip = computed(() => {
   const d = detail.value;

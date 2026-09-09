@@ -53,6 +53,7 @@ export const REASON_TEXT: Record<string, string> = {
   bad_request: "请求参数有误",
   battle_ended: "战斗已结束",
   window_open: "本轮已排满，点「执行」结算",
+  queue_index: "队列序号无效（该动作已不存在）",
   server_error: "服务端异常（请查看控制台日志）",
   network_error: "连接服务端失败",
 };
@@ -148,6 +149,8 @@ export const actions = {
   detail: (gongfa: string) => ["gongfa_detail", { gongfa }] as const,
   chronicle: () => ["chronicle", {}] as const,
   battleSubmit: (key: string) => ["battle_submit", { key }] as const,
+  battleUnqueue: (index: number) => ["battle_unqueue", { index }] as const,
+  battleClear: () => ["battle_clear", {}] as const,
   battleSkip: () => ["battle_skip", {}] as const,
 };
 

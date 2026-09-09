@@ -288,5 +288,21 @@ b.run_window()
 check("迟钝在真实 Battle 生效（有效速度下降）",
       b.p.effective_speed() < base_speed, f"{base_speed} → {b.p.effective_speed()}")
 
+# ============ 9. 队列撤回（battle_unqueue / battle_clear） ============
+print("== 9 队列撤回 ==")
+b = make()
+b.submit("attack")
+b.submit("attack")
+check("队列长度 2", len(b.state()["queue"]) == 2)
+check("队列项带 idx", [q["idx"] for q in b.state()["queue"]] == [0, 1])
+ok, reason = b.unqueue(0)
+check("撤回第 0 个动作", ok and len(b.state()["queue"]) == 1, f"{ok} {reason}")
+ok2, reason2 = b.unqueue(5)
+check("越界撤回 → queue_index", not ok2 and reason2 == "queue_index", f"{ok2} {reason2}")
+ok3, reason3 = b.submit("defend")
+check("撤回后可再排入", ok3, reason3)
+b.clear_queue()
+check("clear_queue 清空", b.state()["queue"] == [])
+
 print(f"\n== 结果：{_PASS} 过 / {_FAIL} 败 ==")
 sys.exit(1 if _FAIL else 0)

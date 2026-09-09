@@ -302,5 +302,23 @@ check("买不起购灵加速 → no_stones 且动作标记不可用",
       not ok and reason == "no_stones" and av["available"] is False
       and av["reason"] == "no_stones", f"{ok} {reason} {av}")
 
+# ============ H. 战斗队列撤回（游戏动作层） ============
+print("== H 战斗队列撤回 ==")
+g = new_game(31)
+g.start_battle(E.id)
+b = g.battle()
+b.submit("attack")
+b.submit("attack")
+r = g.step("battle_unqueue", index=1)
+check("battle_unqueue 成功且返回队列",
+      r.ok is True and len(r.data["queue"]) == 1, f"{r.ok} {r.reason}")
+r2 = g.step("battle_unqueue", index=99)
+check("battle_unqueue 越界 → queue_index",
+      r2.ok is False and r2.reason == "queue_index", f"{r2.ok} {r2.reason}")
+r3 = g.step("battle_clear")
+check("battle_clear 清空队列", r3.ok is True and r3.data["queue"] == [])
+r4 = g.step("explore", site=str(ST.LINGMAI))
+check("战斗中日常动作仍被拒", r4.ok is False and r4.reason == "in_battle")
+
 print(f"\n== 结果：{_PASS} 过 / {_FAIL} 败 ==")
 sys.exit(1 if _FAIL else 0)

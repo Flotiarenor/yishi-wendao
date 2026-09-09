@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import Toasts from "@/components/Toasts.vue";
@@ -23,10 +23,19 @@ const dragging = ref(false);
 
 const runLabel = computed(() => (s.runId ? `本世 ${s.runId}` : "尚未开世"));
 
+// 读档下拉始终显示当前存档（不留空）；多存档切换即读档，选中项保留便于重试
+watch(
+  () => s.runId,
+  (v) => {
+    selLoad.value = v ? String(v) : "";
+  },
+  { immediate: true },
+);
+
 function onSelectRun(e: Event) {
   const v = (e.target as HTMLSelectElement).value;
   if (v) void s.loadRun(v);
-  selLoad.value = "";
+  selLoad.value = v;
 }
 
 /** 拖拽调整「主内容 / 叙事日志」分界 */

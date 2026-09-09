@@ -110,6 +110,12 @@ function submit(key: string) {
 function execute() {
   void s.battleSkip();
 }
+function unqueue(index: number) {
+  void s.battleUnqueue(index);
+}
+function clearQueue() {
+  void s.battleClear();
+}
 function backToMap() {
   ui.closeBattle();
   ui.open("map");
@@ -253,14 +259,28 @@ const playerEffects = computed(() => b.value?.effects?.player || []);
       </button>
     </div>
 
-    <!-- ===== 队列 ===== -->
+    <!-- ===== 队列（可撤回/清空，不推进时间轴、不消耗资源） ===== -->
     <div class="queue">
+      <div class="q-head">
+        <span class="dim">本轮队列（{{ b.queue.length }}）</span>
+        <button v-if="b.queue.length" class="btn mini ghost" :disabled="s.busy" @click="clearQueue">
+          清空
+        </button>
+      </div>
       <span v-if="!b.queue.length" class="dim">
         （本轮队列为空 —— 点上方动作排入，或直接「执行本轮」空过）
       </span>
       <span v-for="(q, i) in b.queue" :key="i" class="q-item">
         {{ i + 1 }}. {{ q.name }}
         <span class="dim mono">耗{{ q.qi_cost }} · 止于 {{ li(q.end_t) }}息</span>
+        <button
+          class="q-undo"
+          :disabled="s.busy"
+          title="撤回该动作（不入队结算、不消耗资源）"
+          @click="unqueue(i)"
+        >
+          撤回
+        </button>
       </span>
     </div>
 
@@ -364,6 +384,19 @@ const playerEffects = computed(() => b.value?.effects?.player || []);
 
 /* ---------- 队列 ---------- */
 .queue { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; margin-top: 9px; }
+.q-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.q-undo {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink-dim);
+  font-size: 11.5px;
+  padding: 1px 7px;
+  cursor: pointer;
+}
+.q-undo:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); }
+.q-undo:disabled { opacity: .5; cursor: not-allowed; }
 .q-item {
   background: var(--panel3);
   border: 1px solid var(--line);

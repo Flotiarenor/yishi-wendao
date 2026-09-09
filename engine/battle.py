@@ -43,6 +43,7 @@ R_LOW_QI = "low_qi"
 R_CONDITION_FAILED = "condition_failed"
 R_QUEUE_EMPTY = "queue_empty"
 R_WINDOW_OPEN = "window_open"      # 队列未满窗口，需继续排或点跳过
+R_QUEUE_INDEX = "queue_index"      # 撤回时队列序号无效
 
 # 控制类效果（前摇被打断的触发源）——权威定义在 engine/status.py
 CONTROL_KEYS = ST.CONTROL_KEYS
@@ -135,6 +136,7 @@ class Battle:
         self.battle_id = int(battle_id)
         self.enemy = enemy
         self.p = actor_from_stats(player_stats, "player", "你")
+        self.stones0 = self.p.stones          # 开战灵石（结算只扣增量，不整体覆盖）
         self.e = actor_from_enemy(enemy)
         self.actions = {a.key: a for a in (player_actions or [])}
         self.enemy_actions = list(enemy_actions or [])
@@ -194,8 +196,8 @@ class Battle:
                 continue
             from engine.clock import total_li
             acc += total_li(a.timing, self.p.effective_speed())
-            q.append({"key": key, "name": a.display(), "qi_cost": a.qi_cost,
-                      "end_t": acc})
+            q.append({"idx": len(q), "key": key, "name": a.display(),
+                      "qi_cost": a.qi_cost, "end_t": acc})
         return {
             "t": self.clock.t,
             "enemy": {"id": self.enemy.id, "name": self.e.name,
@@ -255,6 +257,22 @@ class Battle:
 
     def clear_queue(self):
         self.queue.clear()
+
+    def unqueue(self, index) -> tuple:
+        """撤回队列中第 index 个动作（0 基；不推进时间轴、不消耗资源）。返回 (ok, reason)。"""
+        self.last_reason = ""
+        if self._ended:
+            self.last_reason = R_BATTLE_ENDED
+            return False, R_BATTLE_ENDED
+        try:
+            i = int(index)
+        except (TypeError, ValueError):
+            i = -1
+        if not 0 <= i < len(self.queue):
+            self.last_reason = R_QUEUE_INDEX
+            return False, R_QUEUE_INDEX
+        self.queue.pop(i)
+        return True, ""
 
     # ============================================================
     # 主循环：跑完一个决策窗口
