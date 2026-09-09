@@ -30,8 +30,7 @@ _CELL_LI = S.WORLD_CELL_LI              # 100.0
 _N = S.WORLD_CELLS                      # 200
 _WORLD_LI = S.WORLD_LI
 _DOMAIN_CELLS = S.WORLD_CELLS // S.DOMAIN_GRID   # 每域 40 格
-_PLAN = S.ROAD_PLAN_MULT                # 2
-_PLAN_N = S.WORLD_CELLS // _PLAN        # 100（粗栅格每轴格数）
+_PLAN = S.ROAD_PLAN_MULT                # 2（路网规划粗栅格：2 格 = 200 里）
 _SI_PER_DAY = float(S.SI_PER_DAY)
 
 _HARD = R.HARD_BLOCK_IDS
@@ -281,6 +280,18 @@ class ContentPoint:
     tier: str
 
 
+class _FeatureTuple(tuple):
+    """要素元组：既可用属性取用（`wm.towns`），也可按任务书 §4.0 方法调用（`wm.towns()`）。
+
+    两种取用方式返回同一个对象，保证 `wm.towns() == wm.towns`。
+    """
+
+    __slots__ = ()
+
+    def __call__(self):
+        return self
+
+
 @dataclass(frozen=True)
 class River:
     """一条河（折线 + 格序列 + 长度）。
@@ -496,6 +507,12 @@ class WorldMap:
         self._comp = None            # 粗栅格连通分量（城镇选址用）
         self._field_cache = {}       # (profile, realm, shenfa, box, roads, step) → CostField
         self._checksum = None
+        # 旧地点锚点格（路网落格时跳过，保证锚点基础地形不被覆盖）
+        self._anchor_cells = set()
+        for _name in sorted(R.LEGACY_ANCHORS):
+            _ax, _ay = R.LEGACY_ANCHORS[_name]
+            _acx, _acy = cell_of(_ax, _ay)
+            self._anchor_cells.add(_acy * _N + _acx)
 
     # ---------- 通用访问器 ----------
     @classmethod
@@ -739,7 +756,7 @@ class WorldMap:
                     cxx = (cx + 0.5) * _CELL_LI
                     if math.hypot(cxx - wx, cyy - wy) <= wr:
                         base[cy * n + cx] = _T_WARD
-        self._wards = tuple(wards)
+        self._wards = _FeatureTuple(wards)
         # 锚点保底：在禁制 / 边界覆盖之后执行（任务书 §4.2 步骤 2）
         self._force_anchors_walkable()
 
@@ -868,7 +885,7 @@ class WorldMap:
                 river_cell_set.add(best[1] * n + best[0])
             out.append(River(points=pts, cells=cells, length_li=length,
                              fords=tuple(fords)))
-        self._rivers = tuple(out)
+        self._rivers = _FeatureTuple(out)
         self._river_cells = frozenset(river_cell_set)
         self._force_anchors_walkable()
 
@@ -902,33 +919,26 @@ class WorldMap:
         self._near_river = frozenset(out)
         return self._near_river
 
-    # ---------- 粗栅格连通分量（城镇选址保证路网可连通） ----------
-    def _coarse_components(self):
-        """粗栅格（200 里）上"非硬阻挡"的连通分量；返回 (最大分量 id, 每格分量 id 数组)。"""
+    # ---------- 大陆连通分量（城镇选址保证路网可连通） ----------
+    def _mainland(self):
+        """练气期可通行口径的**全局最大连通分量** `MAINLAND`（细格，8 连通 + 防穿角）。
+
+        可通行 = 非硬阻挡且非湖泊/河流（渡口可通行），与 `profile="fastest"`、`realm_idx=1` 一致。
+        返回 `(最大分量 id, 每格分量 id 数组, 可通行位图)`；城镇候选格必须落在 `MAINLAND` 内。
+        """
         if self._comp is not None:
             return self._comp
-        n2 = _PLAN_N
+        n = _N
         base = self._base
-        passable = bytearray(n2 * n2)
-        for py in range(n2):
-            for px in range(n2):
-                ok = 1
-                for oy in _SAMPLES:
-                    fy = min(_N - 1, int((py * _PLAN + oy * _PLAN)))
-                    row = fy * _N
-                    for ox in _SAMPLES:
-                        fx = min(_N - 1, int((px * _PLAN + ox * _PLAN)))
-                        if base[row + fx] in _HARD:
-                            ok = 0
-                            break
-                    if not ok:
-                        break
-                passable[py * n2 + px] = ok
-        comp = [-1] * (n2 * n2)
+        passable = bytearray(n * n)
+        for idx in range(n * n):
+            t = base[idx]
+            passable[idx] = 0 if (t in _HARD or t == _T_WATER) else 1
+        comp = [-1] * (n * n)
         best_id = -1
         best_size = -1
         cur = 0
-        for start in range(n2 * n2):
+        for start in range(n * n):
             if passable[start] == 0 or comp[start] >= 0:
                 continue
             stack = [start]
@@ -937,21 +947,26 @@ class WorldMap:
             while stack:
                 i = stack.pop()
                 size += 1
-                py, px = divmod(i, n2)
+                py, px = divmod(i, n)
                 for dy in (-1, 0, 1):
                     ny = py + dy
-                    if ny < 0 or ny >= n2:
+                    if ny < 0 or ny >= n:
                         continue
                     for dx in (-1, 0, 1):
                         if dx == 0 and dy == 0:
                             continue
                         nx = px + dx
-                        if nx < 0 or nx >= n2:
+                        if nx < 0 or nx >= n:
                             continue
-                        j = ny * n2 + nx
-                        if passable[j] and comp[j] < 0:
-                            comp[j] = cur
-                            stack.append(j)
+                        j = ny * n + nx
+                        if passable[j] == 0 or comp[j] >= 0:
+                            continue
+                        if dx and dy:
+                            # 防穿角（与 A* 同步）：两个正交邻格都要可通行
+                            if passable[py * n + nx] == 0 or passable[ny * n + px] == 0:
+                                continue
+                        comp[j] = cur
+                        stack.append(j)
             if size > best_size:
                 best_size = size
                 best_id = cur
@@ -964,12 +979,14 @@ class WorldMap:
         seed = self.world_seed
         n = _N
         near_river = self._near_river_cells()
-        best_comp, comp, _pass = self._coarse_components()
+        best_comp, comp, _pass = self._mainland()
         base = self._base
         elev = self._elev
         towns = []
         # 主城名先占位，保证随机命名不会抢走「青石镇」
         used_names = {_MAIN_TOWN: True}
+        _acx, _acy = cell_of(R.LEGACY_ANCHORS["坊市"][0], R.LEGACY_ANCHORS["坊市"][1])
+        _anchor_idx = _acy * _N + _acx          # 坊市锚点格（留给青石镇）
 
         for d in range(len(R.DOMAINS)):
             dom = R.DOMAINS[d]
@@ -984,6 +1001,10 @@ class WorldMap:
                     tid = base[idx]
                     if tid in _HARD or tid == _T_WATER or tid == _T_FORD:
                         continue
+                    if comp[idx] != best_comp:      # 前置：候选必须落在 MAINLAND 内
+                        continue
+                    if idx in self._anchor_cells and idx != _anchor_idx:
+                        continue                    # 旧地点锚点格只留给锚点本身
                     e = elev[idx]
                     score = 0.0
                     if idx in near_river:
@@ -996,8 +1017,7 @@ class WorldMap:
                         score -= 0.8
                     if tid in (_T_DESERT, _T_SNOW, _T_SWAMP, _T_LAVA):
                         score -= 0.6
-                    in_main = 1 if comp[(cy // _PLAN) * _PLAN_N + (cx // _PLAN)] == best_comp else 0
-                    cands.append((-score, cy, cx, in_main))
+                    cands.append((-score, cy, cx, 1))
             cands.sort()
 
             accepted = []
@@ -1006,7 +1026,7 @@ class WorldMap:
                 acx, acy = cell_of(ax, ay)
                 accepted.append((acy, acx, True))
             picked = set()
-            # 主分量优先 → 间距 300 / 200 / 150 逐级放宽
+            # 间距 300 / 200 / 150 逐级放宽
             for min_gap in _TOWN_MIN_GAPS:
                 if len(accepted) >= quota:
                     break
@@ -1016,27 +1036,6 @@ class WorldMap:
                         break
                     if not in_main:
                         continue
-                    key = (cy, cx)
-                    if key in picked:
-                        continue
-                    x, y = center_of(cx, cy)
-                    ok = True
-                    for acy, acx, _ in accepted:
-                        ax, ay = center_of(acx, acy)
-                        dx = ax - x
-                        dy = ay - y
-                        if dx * dx + dy * dy < gap2 - 1e-9:
-                            ok = False
-                            break
-                    if ok:
-                        picked.add(key)
-                        accepted.append((cy, cx, False))
-            # 兜底：仍不足则放开连通分量限制（孤立陆块也能有镇）
-            if len(accepted) < quota:
-                gap2 = 150.0 * 150.0
-                for negscore, cy, cx, in_main in cands:
-                    if len(accepted) >= quota:
-                        break
                     key = (cy, cx)
                     if key in picked:
                         continue
@@ -1081,7 +1080,7 @@ class WorldMap:
                 main = is_anchor if d == R.CORE_DOMAIN_IDX else (k == 0)
                 towns.append(Town(id="town_" + name, name=name, x=float(x), y=float(y),
                                   domain_idx=d, tier=dom.tier, is_main=bool(main)))
-        self._towns = tuple(towns)
+        self._towns = _FeatureTuple(towns)
 
     # ---------- 步骤 5：路网 ----------
     def _plan_field(self, profile: str = "road_plan") -> CostField:
@@ -1165,6 +1164,7 @@ class WorldMap:
                 pairs.append((math.hypot(b.x - a.x, b.y - a.y), a.id, b.id))
         pairs.sort()
         failed = set()
+        paths_fine = set()
         attempts = 0
         while _ncomp() > 1 and attempts < 120:
             idx = 0
@@ -1189,6 +1189,11 @@ class WorldMap:
                     forced = self._plan_field("road_forced")
                 cells, cost, reason = self._astar(forced, ca, cb)
             if cells is None:
+                # 细格兜底：粗栅格 9 点采样可能切断 1 格宽的陆桥，而 MAINLAND 是细格连通的
+                cells, cost, reason = self._route_fine(ca, cb, margin=12, full=True)
+                if cells is not None:
+                    paths_fine.add(key)
+            if cells is None:
                 failed.add(key)
                 continue
             paths[key] = cells
@@ -1201,13 +1206,31 @@ class WorldMap:
         for key in accepted:
             a, b = by_id[key[0]], by_id[key[1]]
             kind = "road" if (a.domain_idx != b.domain_idx or (a.is_main and b.is_main)) else "trail"
-            fine = self._mark_road_path(paths[key], kind)
+            if key in paths_fine:
+                fine = self._mark_road_cells(paths[key], kind)     # 细格兜底路径直接落格
+            else:
+                fine = self._mark_road_path(paths[key], kind)
             if not fine:
                 continue
             pts = tuple(center_of(cx, cy) for cx, cy in fine)
             roads.append(Road(kind=kind, points=pts, cells=tuple(fine),
                               length_li=_polyline_li(pts), a=a.id, b=b.id))
-        self._roads = tuple(roads)
+        # 收尾不变式：Road.cells 的每一格都必须有路/小径/渡口标记
+        # （细格兜底路径可能带入未落格的格；T6 逐格取色依赖这条）
+        # 例外：5 个旧地点锚点格刻意保持 T_PLAIN/T_ROAD（不落路网覆盖），跳过。
+        _anchor_idx = set()
+        for _ax, _ay in R.LEGACY_ANCHORS.values():
+            _acx, _acy = cell_of(_ax, _ay)
+            _anchor_idx.add(_acy * _N + _acx)
+        for _rd in roads:
+            _fallback = _T_TRAIL if _rd.kind == "trail" else _T_ROAD
+            for _cx, _cy in _rd.cells:
+                _idx = _cy * _N + _cx
+                if _idx in _anchor_idx:
+                    continue
+                if _idx not in self._road_cells and _idx not in self._town_cells:
+                    self._road_cells[_idx] = _fallback
+        self._roads = _FeatureTuple(roads)
 
     def _mark_road_path(self, coarse_cells, kind: str) -> list:
         """把粗栅格路径落成细格路（每步直线栅格化，遇硬阻挡局部绕行）。
@@ -1224,17 +1247,21 @@ class WorldMap:
                     hit = True
                     break
             if hit:
-                routed = self._route_fine(reps[i - 1], reps[i])
+                routed, _c, _r = self._route_fine(reps[i - 1], reps[i])
                 if routed:
                     seg = routed
             fine.extend(seg[1:])
+        return self._mark_road_cells(fine, kind)
+
+    def _mark_road_cells(self, fine, kind: str) -> list:
+        """细格序列落格：跨水改标渡口；硬阻挡 / 城镇格 / 旧地点锚点格不覆盖。"""
         out = []
         for cx, cy in fine:
             idx = cy * _N + cx
             tid = self._base[idx]
             if tid in _HARD:
                 continue
-            if idx in self._town_cells:
+            if idx in self._town_cells or idx in self._anchor_cells:
                 out.append((cx, cy))
                 continue
             if tid == _T_WATER or tid == _T_FORD:
@@ -1244,15 +1271,17 @@ class WorldMap:
             out.append((cx, cy))
         return out
 
-    def _route_fine(self, a: tuple, b: tuple) -> list:
-        """局部细格绕行（硬阻挡挡路时用）。"""
-        m = 6
-        box = (max(0, min(a[0], b[0]) - m), max(0, min(a[1], b[1]) - m),
-               min(_N - 1, max(a[0], b[0]) + m), min(_N - 1, max(a[1], b[1]) + m))
-        field = self.cost_field("road_plan", realm_idx=1, shenfa=0.0, box=box,
-                                with_roads=False, step=1)
-        cells, cost, reason = self._astar(field, a, b)
-        return cells if cells else []
+    def _route_fine(self, a: tuple, b: tuple, margin: int = 6, full: bool = False):
+        """细格寻路（profile="road_plan"）：局部绕行或全图兜底；返回 (cells 或 None, cost, reason)。"""
+        if full:
+            field = self.cost_field("road_plan", realm_idx=1, shenfa=0.0, box=None,
+                                    with_roads=False, step=1)
+        else:
+            box = (max(0, min(a[0], b[0]) - margin), max(0, min(a[1], b[1]) - margin),
+                   min(_N - 1, max(a[0], b[0]) + margin), min(_N - 1, max(a[1], b[1]) + margin))
+            field = self.cost_field("road_plan", realm_idx=1, shenfa=0.0, box=box,
+                                    with_roads=False, step=1)
+        return self._astar(field, a, b)
 
     # ---------- 步骤 6：内容点与灵脉 ----------
     def _build_points(self):
@@ -1273,6 +1302,7 @@ class WorldMap:
         cands = []
         vein_dense = [[] for _ in range(len(R.DOMAINS))]
         vein_all = [[] for _ in range(len(R.DOMAINS))]
+        domain_land = [[] for _ in range(len(R.DOMAINS))]
         for cy in range(n):
             row = cy * n
             for cx in range(n):
@@ -1282,6 +1312,7 @@ class WorldMap:
                     continue
                 d = R.domain_of_cell(cx, cy)
                 ti = tier_idx[R.DOMAINS[d].tier]
+                domain_land[d].append((cy, cx))
                 for k in kinds:
                     if hash01(seed, "cp:" + k, cx, cy) < dens[k][ti]:
                         cands.append((cy, cx, k))
@@ -1290,7 +1321,7 @@ class WorldMap:
                     if hash01(seed, "cp:vein", cx, cy) < vein_dens_t[ti]:
                         vein_dense[d].append((cy, cx))
 
-        # 灵脉：每域 3~6 个（不足则从合法格里补足，仍满足地形 / 近河限制）
+        # 灵脉：每域 3~6 个；平坦域兜底——严格条件格 < 3 时纳入该域全部可通行非水域格
         for d in range(len(R.DOMAINS)):
             n_want = R.VEIN_PER_DOMAIN[0] + int(
                 hash01(seed, "veincnt", d, 0) * (R.VEIN_PER_DOMAIN[1] - R.VEIN_PER_DOMAIN[0] + 1))
@@ -1299,13 +1330,16 @@ class WorldMap:
             chosen = sorted(vein_dense[d])[:n_want]
             if len(chosen) < R.VEIN_PER_DOMAIN[0]:
                 have = set(chosen)
-                for cy, cx in sorted(vein_all[d]):
+                pool = vein_all[d]
+                if len(pool) < R.VEIN_PER_DOMAIN[0]:
+                    pool = domain_land[d]          # 平坦域兜底
+                rest = [c for c in pool if c not in have]
+                rest.sort(key=lambda c: (hash01(seed, "veinpool", c[1], c[0]), c[1], c[0]))
+                for c in rest:
                     if len(chosen) >= R.VEIN_PER_DOMAIN[0]:
                         break
-                    if (cy, cx) in have:
-                        continue
-                    chosen.append((cy, cx))
-                    have.add((cy, cx))
+                    chosen.append(c)
+                    have.add(c)
             for cy, cx in chosen:
                 cands.append((cy, cx, "vein"))
 
@@ -1333,36 +1367,36 @@ class WorldMap:
                 kind=kind,
                 name=R.CONTENT_KINDS[kind]["name"] + dom.name[-2:],
                 x=x, y=y, domain_idx=d, element=best_e, tier=dom.tier))
-        self._points = tuple(points)
+        self._points = _FeatureTuple(points)
 
-    # ---------- 对外数据 ----------
+    # ---------- 对外数据（返回 `_FeatureTuple`：属性取用 / §4.0 方法调用都可用） ----------
     @property
     def wards(self) -> tuple:
-        """3 处禁制中心：(x, y, 半径里)。"""
+        """禁制中心元组：(x, y, 半径里)。"""
         self._ensure_terrain()
         return self._wards
 
     @property
     def rivers(self) -> tuple:
-        """全部河流（含渡口格）。"""
+        """全部河流（含渡口格）；`wm.rivers` 与 `wm.rivers()` 等价。"""
         self._ensure_rivers()
         return self._rivers
 
     @property
     def towns(self) -> tuple:
-        """全部城镇（生成顺序：域 idx 升序、域内评分降序）。"""
+        """全部城镇（生成顺序：域 idx 升序、域内评分降序）；`wm.towns` 与 `wm.towns()` 等价。"""
         self._ensure_towns()
         return self._towns
 
     @property
     def roads(self) -> tuple:
-        """全部路网段（A* 最小代价路径落格而成）。"""
+        """全部路网段（A* 最小代价路径落格而成）；`wm.roads` 与 `wm.roads()` 等价。"""
         self._ensure_roads()
         return self._roads
 
     @property
     def content_points(self) -> tuple:
-        """全部内容点。"""
+        """全部内容点；`wm.content_points` 与 `wm.content_points()` 等价。"""
         self._ensure_points()
         return self._points
 
