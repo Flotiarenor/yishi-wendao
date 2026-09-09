@@ -228,14 +228,18 @@ def _gongfa_tick(g, turns: int) -> bool:
     return False
 
 
-def play(seed: int, max_turns: int = 20000, verbose: bool = False,
-         battle_stats: dict = None):
+def play_game(seed: int, max_turns: int = 20000, verbose: bool = False,
+              battle_stats: dict = None, out=print):
+    """跑一整局 bot，返回 (Game, outcome)。`out` 可替换打印函数。
+
+    供 `play()`（人读）与 `tools/replay.py`（静默取指纹）共用，避免两处维护 bot 策略。
+    """
     g = Game(seed=seed)
     p = g.state.player
     if battle_stats is None:
         battle_stats = {}
-    print(f"seed={seed}  {p.name}  {p.spirit_root} 效率x{p.root_mult:.2f}"
-          f" 主修:{G.name_of(p.main_gongfa) if p.main_gongfa else '无'} 灵石{p.spirit_stones}")
+    out(f"seed={seed}  {p.name}  {p.spirit_root} 效率x{p.root_mult:.2f}"
+        f" 主修:{G.name_of(p.main_gongfa) if p.main_gongfa else '无'} 灵石{p.spirit_stones}")
     turns = 0
     outcome = "回合上限"
     while p.alive and turns < max_turns:
@@ -255,11 +259,11 @@ def play(seed: int, max_turns: int = 20000, verbose: bool = False,
             if _q(p, P.QINGXIN) > 0:
                 g.step("use_pill", item=str(P.QINGXIN))
                 if verbose:
-                    print(f"  T{turns} 服清心丹 心魔→{p.heart_demon}")
+                    out(f"  T{turns} 服清心丹 心魔→{p.heart_demon}")
             else:
                 g.step("age_pass", days=30)
                 if verbose:
-                    print(f"  T{turns} 心魔高无药，静养压制")
+                    out(f"  T{turns} 心魔高无药，静养压制")
         # 2.5) P3 功法链（参悟入门/装主修/换装/解锁技能）
         if _gongfa_tick(g, turns):
             turns += 1
@@ -269,7 +273,7 @@ def play(seed: int, max_turns: int = 20000, verbose: bool = False,
                 and p.spirit_stones >= cand.price + 80:
             g.step("travel", site=str(ST.SHISHI))
             if verbose:
-                print(f"  T{turns} 灵石富余→回坊市购更强主修（{cand.name}）")
+                out(f"  T{turns} 灵石富余→回坊市购更强主修（{cand.name}）")
             turns += 1
             continue
         # 3) 修为满则准备突破
@@ -278,12 +282,12 @@ def play(seed: int, max_turns: int = 20000, verbose: bool = False,
             if need == "可突破":
                 r = g.step("breakthrough")
                 if verbose:
-                    print(f"  T{turns} {r.text[:90]}")
+                    out(f"  T{turns} {r.text[:90]}")
             elif need == "缺灵石":
                 site = _pick_site(p)
                 r = g.step("explore", site=str(site))
                 if verbose:
-                    print(f"  T{turns} 缺灵石→探索 {r.text[-60:]}")
+                    out(f"  T{turns} 缺灵石→探索 {r.text[-60:]}")
             else:  # 缺突破丹
                 pill_name = need[1:]
                 pid = P.ID_BY_NAME.get(pill_name)
@@ -296,23 +300,31 @@ def play(seed: int, max_turns: int = 20000, verbose: bool = False,
                 if p.spirit_stones >= P.by_id(pid).price:
                     g.step("buy", item=str(pid), qty=1)
                     if verbose:
-                        print(f"  T{turns} 坊市购{pill_name}")
+                        out(f"  T{turns} 坊市购{pill_name}")
                 else:
                     site = _pick_site(p)
                     g.step("explore", site=str(site))
                     if verbose:
-                        print(f"  T{turns} 灵石不足买{pill_name}→探索")
+                        out(f"  T{turns} 灵石不足买{pill_name}→探索")
         else:
             need_days = int((p.exp_cap() - p.exp) / (S.BASE_DAILY_EXP * _main_mult(p))) + 1
             days = min(need_days, 120)
             use_pill = _q(p, P.JULING) > 0
             g.step("cultivate", days=days, use_pill=use_pill)
             if verbose and turns % 30 == 0:
-                print(f"  T{turns} 闭关{int(p.exp)}/{p.exp_cap()}")
+                out(f"  T{turns} 闭关{int(p.exp)}/{p.exp_cap()}")
         turns += 1
 
     if not p.alive:
         outcome = f"道陨·{p.death_cause}"
+    return g, outcome
+
+
+def play(seed: int, max_turns: int = 20000, verbose: bool = False,
+         battle_stats: dict = None):
+    """人读版：跑一整局并打印摘要（输出与重构前逐字一致）。"""
+    g, outcome = play_game(seed, max_turns, verbose, battle_stats)
+    p = g.state.player
     print(f"  结果: {outcome} | 境界档 {p.realm_idx} ({p.realm_name()}) | 年 {p.age_years:.0f} "
           f"| 心魔 {p.heart_demon} | 灵石 {p.spirit_stones} | 背包 {p.inventory}")
     print(f"  编年史 {len(g.state.chronicle.entries)} 条")

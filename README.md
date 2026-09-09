@@ -14,9 +14,28 @@ cd D:\project\Python\game
 .venv\Scripts\python.exe -X utf8 main.py            # 统一入口：起 Web 壳（浏览器玩）
 .venv\Scripts\python.exe -X utf8 main.py web --port 8000   # 同上，指定端口
 .venv\Scripts\python.exe -X utf8 main.py smoke --lives 20  # 自动 bot 回归（记录分布/战斗统计）
-.venv\Scripts\python.exe -X utf8 main.py test              # 一键跑全部测试
+.venv\Scripts\python.exe -X utf8 main.py test              # 一键跑全部测试（9 个单测 + 冒烟）
+.venv\Scripts\python.exe -X utf8 main.py check             # content/ 数据校验（--strict 警告也失败）
 .venv\Scripts\python.exe -X utf8 -m tools.dummy            # 木桩试招（7 流派对照）
 ```
+
+### 开发期工具（`tools/`，引擎运行时零依赖）
+
+```powershell
+python -m tools.content_check                  # 内容校验器：id 撞车/引用悬空/取值越界
+python -m tools.gen_skill --in draft.json --strict --emit code   # 技能生成器（draft → 校验 → 代码）
+python -m tools.gen_skill --random 10 --seed 42 --out drafts.json  # 随机生成（P9 铺垫）
+python -m tools.gen_skill --roundtrip          # 21 个现有技能 draft 往返无损
+python -m tools.replay --mode bot --seeds 1001-1020 --out base.json   # 指纹基线
+python -m tools.replay --mode bot --seeds 1001-1020 --compare base.json  # A/B 对照
+python -m tools.replay --mode script --script script.json             # 显式脚本重放
+```
+
+- **统一技能入口**：手写 / AI 起草 / 随机生成都产出同一份 `draft`（JSON），
+  经 `tools/gen_skill.py` 校验后落成 `content/skills.py` 的 `_sk(...)` 行或规范化 JSON。
+  AI 只需产出 draft，不必知道引擎内部结构。
+- **指纹/重放**：固定种子 + 固定策略/脚本 → 稳定 JSON 快照 + sha256 摘要，
+  用于"改代码后引擎行为有没有变"的 A/B 对照（替代此前手搓的 worktree 脚本）。
 
 ### 前端构建（P3.7，Vue3）
 
@@ -60,10 +79,17 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
   `engine/battle.py` 时间轴战斗（决策窗口 + 队列 + 敌方插入 + 统一灵兽进攻）+
   `content/actions.py` 动作数据化 + `tools/dummy.py` 木桩；CLI 下线（存档 I/O 迁 `server/`）。
   基线：`test_effects` 33 + `test_hardening` 55 + `test_clock` 59 + `test_action` 53 +
-  `test_battle_time` 35 + `test_gongfa_deep` 91 + `test_server` 79 = **405 项**；
+  `test_battle_time` 35 + `test_gongfa_deep` 91 + `test_server` 79 = **405 项**
+  （+ `test_content_tools` 32 + `test_replay` 16 = **453 项**）；
   smoke 20 局 = **17 通关/3 道陨、3803 场、平均终档 22.8**
 - ✅ **P3.7** 正式前端（Vue3 + Vite + Pinia + TS，`frontend/`）：FastAPI 伺服 `frontend/dist`（SPA fallback，`/api` 404 不被吞）；布局 = **左状态（含切换按钮）/ 中上主内容（地图为主页面）/ 中下叙事日志（可拖拽高度）**，遇敌时**战斗临时接管主内容区**（时间轴 / 决策窗口 / 队列入队-执行 / 双方效果 / 动作可用性，常用动作在上、技能折叠）+ **修炼页**（闭关/参悟/突破/静养，参悟选择记忆）+ 坊市（灵石/背包/购买数量/买不起置灰）+ 书库（详情/装备/卸下）+ 编年史时间线 + 状态面板（五行亲和/业力）；旧 P3.6 极简面板删除（`server/static`）；顺带修复 `gongfa_detail` 对 7/12 功法抛 500 的 `SkillSpec.element` bug；`tests/test_server.py` 79 项 + 前端 E2E 27 项
 - ⬜ **P4 起未做**（详见 `docs/实现路线图.md`）：突破考验（P4）、五行宝光（P5）、死亡转世（P6）、人物势力（P7）、事件化（P8）、生成器（P9）、平衡标定（P10）、pywebview 桌面壳
+- ✅ **工具链（2026-09-10）**：`tools/content_check.py` 内容校验器（当前 0 错误 / 17 警告，
+  警告含 `guard`/`evade` 无引擎消费者——即下方待修问题 1 的回归护栏）；
+  `tools/gen_skill.py` 统一技能生成器（`draft → 校验 → content/skills.py 代码 / JSON`，
+  手写 / AI 起草 / 随机生成共用一套规则；21 个现有技能往返无损）；
+  `tools/replay.py` 指纹/重放（`bot` / `script` 两模式 + `--compare` A/B 对照）；
+  `tests/test_content_tools.py` 32 项 + `tests/test_replay.py` 16 项；新增 `main.py check`
 
 ⚠️ **平衡说明（2026-09-09 修正）**：smoke 的通关率是**固定种子+固定策略的回归指纹**，不是平衡指标
 （换 bot 策略数字就变，与游戏好不好玩无关）。数值平衡统一在 P10 用多策略采样 + 支配策略/资源曲线等
@@ -88,7 +114,8 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
    随机流会改变同一 salt 的结果；`test_battle_time.py` §5 的"额外 rng 调用不影响"断言
    靠整数舍入偶然通过（实测 roll 0.6206 vs 0.6404）。
 5. **木桩工具与正式内容脱节**：`tools/dummy.py` 只测 `content/actions.py` 的 9 个 R2 demo
-   动作，**不测** `content/skills.py` 的 21 个正式技能。
+   动作，**不测** `content/skills.py` 的 21 个正式技能。（技能数据入口已由
+   `tools/gen_skill.py` 统一，但 dummy 的流派对照仍走 demo 动作，待接正式技能。）
 6. **身法槽/五行单向**：玩家 `Actor.element` 恒为「无」；身法槽两本功法给的技能都是
    `evade`（当前失效）；敌人 `ENEMY_STRIKE.element="无"`，敌方元素只作"被克靶子"。
 7. 文档：`docs/会话交接.md` 偏大且历史数字多（已加口径提醒）；`docs/Web架构方案.md`
@@ -97,14 +124,14 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
 ## 目录结构
 
 ```
-main.py    统一入口（仓库根级）：web / smoke / test 三个子命令
+main.py    统一入口（仓库根级）：web / smoke / test / check 四个子命令
 engine/    纯逻辑引擎（无 I/O）：clock 时间轴 / rules 纯函数规则 / action 动作模型 / battle 时间轴战斗 / game 主循环 / effects 效果运行时 / rng 确定性随机 / state 状态 / settings 数值
 content/   实体数据（id 编码）：ids / effects 效果模板 / actions 动作数据 / pills(20段) / sites(10段) / skills(30段) / gongfa(40段) / enemies(60段)
 server/    Web 壳：session 会话层(GameSession/RunManager) / savefile 存档 I/O / app FastAPI 路由（伺服 frontend/dist）/ main 启动
 frontend/  正式前端（Vue3+Vite+Pinia+TS）：src/api 客户端 / src/stores Pinia / src/views 各界面 / dist 构建产物（gitignore）
-tools/     dummy.py 木桩试招（7 流派对照 + 逐招时间轴）
-tests/     smoke 自动 bot 回归 / test_clock 时间轴 / test_action 动作 / test_battle_time 时间轴战斗 / test_effects 效果 / test_gongfa_deep 功法深层 / test_server Web 壳 / test_hardening 引擎加固
-docs/      见文档地图
+tools/     开发期工具：dummy 木桩 / content_check 内容校验 / gen_skill 技能生成器 / replay 指纹重放
+tests/     smoke 自动 bot 回归 / test_clock 时间轴 / test_action 动作 / test_battle_time 时间轴战斗 / test_effects 效果 / test_gongfa_deep 功法深层 / test_server Web 壳 / test_hardening 引擎加固 / test_content_tools 内容工具 / test_replay 指纹重放
+docs/      见 docs/README.md 文档地图
 saves/     （运行时自动生成、已 gitignore；run_<seed>.json 档）
 .git/      本地仓库（根级；.venv/saves/logs/node_modules/dist 已忽略）
 .venv/     虚拟环境（Python 3.13）
