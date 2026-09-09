@@ -32,6 +32,7 @@ cd D:\project\Python\game
 - ✅ **P3.5** 动作结果结构化：`Result` 增 `ok/reason/data`（原因码 R_* 枚举）；状态/市场/详情改为「数据 + 渲染」分离；测试判定改用 reason/data（不再刮文案）；`52+89` 项单测
 - ✅ **P3.6** 最小 Web 闭环：FastAPI 服务端 + `GameSession`/`RunManager` 会话层 + `/api/new|load|step|undo|state|runs` 结构化接口 + 极简 HTML 面板（`python -m server.main` → http://127.0.0.1:8000）；`tests/test_server.py` 69 项；smoke 20 局不变（18/2、482 场）
 - ✅ **P3.8** 效果/状态系统（组件化最小核心）：效果=实体（`content/effects.py` 模板袋）+ 固定管线（`engine/battle.py`）+ 修饰器扩展点（`engine/effects.py`，`register_effect`/`register_modifier`）；四 flag → 效果袋 + 兼容只读 property；`Skill.effect_key`/`modifiers`；战报 data 含双方效果列表；`tests/test_effects.py` 61 项；52+89+69 与 smoke 20 局逐位不变
+- ✅ **P3.9** 引擎加固（代码审查后修复 5 项，`tests/test_hardening.py` 55 项）：① `step()` 数值参数经 `_as_int` 转换——Web 传坏值不再 500（此前 `days="abc"` → HTTP 500）；② 身死拦截（`alive=False` 时除 status/chronicle 一律 `game_over`，此前死后还能探索赚灵石）；③ 突破寿元改为「加基准差额」（此前成功即重置，把累积折寿一次抹平）；④ 闭关修为封顶（收敛到「刚好圆满的那一天」+ 浮点 epsilon 吸附，不再溢出浪费寿元，也不会 0 天空转）；⑤ `market` 与 `buy` 统一要求身处坊市；`Result.pill_line` 转正式字段
 - ⬜ **P3.7 / P4 起未做**（详见 `docs/实现路线图.md`）：正式 Vue3+Vite 前端 + pywebview 桌面壳、突破考验、五行宝光、死亡转世、人物势力、事件化、生成器、平衡标定
 
 ⚠️ **平衡说明（2026-09-09 修正）**：smoke 的通关率是**固定种子+固定策略的回归指纹**，不是平衡指标
@@ -46,7 +47,7 @@ engine/    纯逻辑引擎（无 I/O）：game 主循环 / battle 战斗 / effec
 content/   实体数据（id 编码）：ids / effects 效果模板 / pills(20段) / sites(10段) / skills(30段) / gongfa(40段) / enemies(60段)
 cli/       终端壳：main 主程序 / savefile 存档（server 会话层复用其 I/O）
 server/    Web 壳：session 会话层(GameSession/RunManager) / app FastAPI 路由 / main 启动 / static 极简面板
-tests/     smoke 自动 bot 回归 / test_battle 战斗单测 / test_gongfa_deep 功法深层 / test_server Web 壳 / test_effects 效果系统
+tests/     smoke 自动 bot 回归 / test_battle 战斗单测 / test_gongfa_deep 功法深层 / test_server Web 壳 / test_effects 效果系统 / test_hardening 引擎加固
 docs/      见文档地图
 saves/     （运行时自动生成、已 gitignore；CLI 与 server 共用 run_<seed>.json 档）
 .git/      本地仓库（根级；.venv/saves/logs 已忽略）
@@ -68,3 +69,7 @@ saves/     （运行时自动生成、已 gitignore；CLI 与 server 共用 run_
    `register_effect` 加模板）；结算走固定管线（`engine/battle.py` 回合内：施加→敌行动→回合末
    tick），伤害统一 `resolve_damage`（无修饰器与旧公式逐位一致）；修饰器（`armor_pen`/`extra_dmg`
    /`register_modifier` 追加）随攻击结算。新增内容只加数据/注册函数，不改结算代码。
+8. **入口参数一律经 `_as_int`（P3.9）**：`step()` 内禁止裸 `int(kw[...])`——Web 壳的 kwargs 不可信，
+   坏值必须回退默认并走结构化拒绝，绝不能抛异常变成 HTTP 500。
+9. **修为封顶与寿元差额（P3.9）**：闭关收敛到「刚好圆满的那一天」（`data.capped`）；突破成功只
+   `寿元 += (新基准−旧基准)`，不得重置寿元（否则折寿被抹平）。

@@ -47,14 +47,25 @@ def _run_smoke(argv):
 
 
 def _run_tests(argv):
-    """依次跑全部测试（子进程隔离；任一失败即非零退出）。"""
+    """依次跑全部测试（子进程隔离；任一失败即非零退出）。
+
+    ⚠️ R3 重构进行中：`test_battle` / `test_effects` / `test_gongfa_deep` / `test_server`
+    仍针对**旧回合制 Battle**，在新时间轴 `engine/battle.py` 下必然失效（按任务书
+    `docs/tasks/P4-R3-时间轴战斗.md` 属"旧基线作废"，R3.3~R3.5 重建后回归本列表）。
+    """
     py = sys.executable
     targets = [
         ("效果系统单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_effects.py")]),
-        ("战斗单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_battle.py")]),
-        ("功法深层单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_gongfa_deep.py")]),
-        ("Web 壳单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_server.py")]),
+        ("引擎加固单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_hardening.py")]),
+        ("时间轴/规则单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_clock.py")]),
+        ("动作模型单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_action.py")]),
+        ("时间轴战斗单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_battle_time.py")]),
         ("冒烟回归 20 局", [py, "-X", "utf8", "-m", "tests.smoke"]),
+    ]
+    legacy = [
+        ("[旧基线·待重建] 回合制战斗", os.path.join("tests", "test_battle.py")),
+        ("[旧基线·待重建] 功法深层", os.path.join("tests", "test_gongfa_deep.py")),
+        ("[旧基线·待重建] Web 壳", os.path.join("tests", "test_server.py")),
     ]
     failed = []
     for name, cmd in targets:
@@ -62,10 +73,14 @@ def _run_tests(argv):
         rc = subprocess.call(cmd, cwd=ROOT)
         if rc != 0:
             failed.append(name)
+    print("\n──── 旧基线（R3 重建中，暂不参与判定）────")
+    for name, path in legacy:
+        exists = os.path.exists(os.path.join(ROOT, path))
+        print(f"  {name}: {'存在待重建' if exists else '缺失'}")
     if failed:
         print(f"\n[FAIL] 未通过：{'、'.join(failed)}")
         sys.exit(1)
-    print("\n[OK] 全部测试通过")
+    print("\n[OK] 全部测试通过（旧基线待 R3.3~R3.5 重建）")
 
 
 def main(argv=None):

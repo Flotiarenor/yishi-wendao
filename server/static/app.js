@@ -28,7 +28,7 @@ const REASON_TEXT = {
   already_equipped: "该功法已在槽位中",
   dup_owned: "已拥有该功法，无需重复购买",
   not_market: "此物坊市不售",
-  not_at_market: "须先前往【坊市】才能购买",
+  not_at_market: "须身处【坊市】才能看货单/购买",
   no_stones: "灵石不足",
   no_pill: "背包里没有此丹",
   pill_use_wrong: "此丹为突破丹药，不可直接服用",
@@ -237,7 +237,14 @@ function renderAll() {
   }
   const inBattle = !!st.battle;
   const dead = st.alive === false;
+  const atMarket = ((st.location && st.location.name) || "") === "坊市";
   actions.classList.toggle("locked", inBattle || dead);
+  // 货单是"坊市现场"信息：离开坊市即收起面板，避免离开后仍能点「购」（引擎会拒）
+  if (!atMarket) { showMarket = false; lastMarket = null; }
+  $("market-panel").classList.toggle("hidden", !showMarket);
+  const mBtn = $("btn-market");
+  mBtn.disabled = !atMarket;
+  mBtn.title = atMarket ? "查看坊市货单" : "须先「前往」坊市";
   renderStatus(st, dead);
   renderBattle(st);
   refreshCombo(st);
@@ -340,7 +347,6 @@ async function fetchMarket() {
 
 function renderMarket() {
   const wrap = $("market-panel");
-  wrap.classList.remove("hidden");
   const d = lastMarket || {};
   const pills = (d.pills || []).map((p) =>
     `<tr><td>${esc(p.name)}</td><td>${p.kind === "breakthrough" ? "突破丹" : "辅助丹"}</td>` +

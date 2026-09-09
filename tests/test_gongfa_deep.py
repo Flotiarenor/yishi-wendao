@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from content import enemies as EM
 from content import gongfa as G
 from content import pills as P
+from content import sites as ST
 from content import skills as SK
 from engine import battle as BTL
 from engine import settings as S
@@ -551,6 +552,7 @@ check("未入门：无任何加成 = root", abs(m3 - 2.0) < 1e-9, f"{m3}")
 # ============ 15. market（结构化：读 data 而非文案） ============
 print("== 15 market 理解锁展示 ==")
 g = new_game(15)
+p_of(g).location = ST.SHISHI          # P3.9：货单须身处坊市
 md = g.step("market").data
 names = [x["name"] for x in md["gongfa"]]
 check("吐纳诀不售（market=False 不入货单）", "吐纳诀" not in names)

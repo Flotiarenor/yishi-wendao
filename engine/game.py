@@ -44,6 +44,7 @@ P3 功法深层规则要点：
   - 背包键、地点字段存 int id（旧档载入时自动迁移）。
 """
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -135,6 +136,8 @@ class Result:
     # 战斗标记（P2）：battle_started=本次操作进入战斗；battle_over=战斗结束的结局
     battle_started: bool = False
     battle_over: str = ""   # win / lose / fled（空=非战斗或战斗未结束）
+    # 闭关用附加叙事行（P3.9 起为正式字段，不再动态挂属性）
+    pill_line: str = ""
 
 
 def _reject(r: Result, reason: str, text: str) -> Result:
@@ -158,6 +161,23 @@ def _accept(r: Result, text: str, data: dict = None) -> Result:
 def _loc_name(loc) -> str:
     """地点 id → 显示名。"""
     return ST.name_of(loc) if isinstance(loc, int) else str(loc)
+
+
+def _as_int(v, default: int = 0) -> int:
+    """外部输入 → int（P3.9 加固：Web 壳 kwargs 不可信，坏值不抛异常）。
+
+    非法输入（None/空串/非数字串/字典…）返回 default；float 截断（int(1.5)==1）。
+    step() 内所有数值参数一律经此转换，保证"引擎拒绝"永远是结构化 Result，
+    而不是把 ValueError 抛到 server 层变成 HTTP 500。
+    """
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, int):
+        return v
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def understandable(realm_idx: int, tier: int) -> bool:
@@ -503,6 +523,12 @@ class Game:
     # ---------- 主循环动作 ----------
     def step(self, action: str, **kw) -> Result:
         r = Result()
+        p = self.state.player
+        # 身死：只允许查看类动作（P3.9 加固：此前只有 cultivate/breakthrough 自查 alive，
+        # 死后仍能 comprehend/explore/age_pass 等——引擎契约与 Web 面板锁不一致）
+        if not p.alive and action not in ("status", "chronicle"):
+            r.game_over = True
+            return _reject(r, R_GAME_OVER, "你已身死道消，本世已终。")
         # 战斗中：只允许战斗指令（status 可查看含战况）
         if self._active_battle is not None and action not in ("battle_action", "status"):
             b = self._active_battle
@@ -517,9 +543,9 @@ class Game:
             r.data = self._status_data()
             r.text = self._status_text()
         elif action == "cultivate":
-            r = self._cultivate(int(kw.get("days", 30)), bool(kw.get("use_pill", False)))
+            r = self._cultivate(_as_int(kw.get("days", 30), 30), bool(kw.get("use_pill", False)))
         elif action == "comprehend":
-            r = self._comprehend(str(kw.get("gongfa", "")), int(kw.get("days", 30)))
+            r = self._comprehend(str(kw.get("gongfa", "")), _as_int(kw.get("days", 30), 30))
         elif action == "breakthrough":
             r = self._breakthrough()
         elif action == "chronicle":
@@ -529,13 +555,13 @@ class Game:
                                   for age, text in self.state.chronicle.entries]}
             r.lines = self._chronicle_text()
         elif action == "age_pass":
-            r = self._age_pass(int(kw.get("days", 30)))
+            r = self._age_pass(_as_int(kw.get("days", 30), 30))
         elif action == "travel":
             r = self._travel(str(kw.get("site", "")))
         elif action == "explore":
             r = self._explore(str(kw.get("site", "")))
         elif action == "buy":
-            r = self._buy(str(kw.get("item", "")), int(kw.get("qty", 1)))
+            r = self._buy(str(kw.get("item", "")), _as_int(kw.get("qty", 1), 1))
         elif action == "use_pill":
             r = self._use_pill(str(kw.get("item", "")))
         elif action == "learn":
@@ -552,10 +578,7 @@ class Game:
                 r.data = data
                 r.text = self._gongfa_detail_text(str(kw.get("gongfa", "")))
         elif action == "market":
-            r.ok = True
-            r.reason = R_OK
-            r.data = self._market_data()
-            r.text = self._market_text()
+            r = self._market()
         elif action == "battle_action":
             return self._battle_action(str(kw.get("cmd", "")), kw.get("skill_id"))
         else:
@@ -653,6 +676,20 @@ class Game:
             lines.append(f"⚠ 遭遇凶险，重伤遁走，折寿{yrs}年，心魔+10！")
         self.state.chronicle.add(p.age_years, f"探索【{site_name}】，得灵石{gain}。")
         return _accept(r, "\n".join(lines), data)
+
+    def _market(self) -> Result:
+        """坊市货单（须身处坊市）。
+
+        P3.9：货单与购买的地点门槛统一——此前 market 在任何地点都能看到全部货单，
+        而 buy 却要求身处坊市，信息面与交易面不一致。现在两者都要求 p.location == 坊市。
+        """
+        r = Result()
+        p = self.state.player
+        if p.location != ST.SHISHI:
+            return _reject(r, R_NOT_AT_MARKET,
+                           f"此处并非坊市（当前在【{_loc_name(p.location)}】），"
+                           f"看不到货单。前往坊市：travel 坊市。")
+        return _accept(r, self._market_text(), self._market_data())
 
     def _market_data(self) -> dict:
         """坊市货单的结构化数据（未看懂功法只给压缩字段：readable=False）。"""
@@ -1035,6 +1072,12 @@ class Game:
 
     # ---------- 闭关修炼 ----------
     def _cultivate(self, days: int, use_pill: bool = False) -> Result:
+        """闭关修炼。
+
+        P3.9 修为封顶：修为不会超过 exp_cap——若请求天数会冲破上限，则只闭关到
+        "刚好圆满的那一天"（days 收敛为实际天数、天数照实推进），多余的闭关不再
+        产生溢出修为（此前溢出无上限、无提示，等于白扔寿元）。
+        """
         r = Result()
         days = max(S.CULTIVATE_MIN_DAYS, min(days, 3650))
         p = self.state.player
@@ -1042,6 +1085,36 @@ class Game:
             r.game_over = True
             return _reject(r, R_GAME_OVER, "你已身死道消。")
         mult = cultivation_mult(p)
+        cap = p.exp_cap()
+        # ---- 修为封顶：收敛天数到"圆满那一天"（已圆满则不再闭关）----
+        # 注意浮点：exp 由多次 天数×BASE×mult 累加而来，可能停在 cap−1e-13
+        # （如 2078.9999999999995 / 2079）。若只判 p.exp >= cap，"刚好差一点"会
+        # 永远进不了"已圆满"分支 → 闭关 0 天、天数不推进 → 调用方（bot/玩家）空转。
+        # 故这里做一次 epsilon 吸附，让"算术上已满"与"浮点上相等"同义。
+        EPS = 1e-9
+        capped = False
+        if cap - p.exp <= EPS:
+            p.exp = float(cap)
+            capped = True
+            days = 0
+        else:
+            per_day = S.BASE_DAILY_EXP * mult
+            if per_day > 0:
+                need_days = math.ceil((cap - p.exp) / per_day - EPS)
+                if need_days < days:
+                    # need_days ≤ 0 = 不足一日即圆满 → 不推进（避免"1 天溢出"破坏封顶不变量）
+                    days = max(0, need_days)
+                    capped = True
+        if days <= 0:
+            return _accept(
+                r,
+                f"你已修为圆满（{int(p.exp)}/{cap}），无需再闭关——"
+                f"尝试突破：b（突破前先备齐灵石/突破丹）。",
+                {"days": 0, "exp_before": p.exp, "exp_gained": 0.0,
+                 "exp_after": p.exp, "exp_cap": cap, "full": True,
+                 "mult": mult, "main_bonus": 1.0, "perm_bonus": 0.0,
+                 "pill_id": None, "pill_qty": 0, "capped": True, "event": None},
+            )
         parts = []
         # 主修与道基被动的加成说明（闭关文本两段）
         perm = sorted(
@@ -1071,9 +1144,12 @@ class Game:
         gained = days * S.BASE_DAILY_EXP * mult
         p.exp += gained
         self._advance_days(days)
-        cap = p.exp_cap()
+        if cap - p.exp <= EPS:
+            p.exp = float(cap)          # 浮点吸附：算术已满 → 与 cap 严格相等
         full = p.exp >= cap
-        extra = f"，修为已圆满可尝试突破" if full else ""
+        extra = (f"，修为已圆满可尝试突破" if full else "")
+        if capped and not full:
+            extra = "（闭关已至圆满之日，多余天数未再推进）"
         # 偶尔的闭关小事件（心魔/顿悟）——先极简
         event = None
         if self.rng.chance(0.05, "seclusion_event"):
@@ -1084,20 +1160,20 @@ class Game:
                     ("气血翻涌，略有损伤", -10),
                 ]
             )
-            p.exp = max(0.0, p.exp + ev[1])
+            p.exp = max(0.0, min(float(cap), p.exp + ev[1]))
             event = ev[0]
             self.state.chronicle.add(p.age_years, f"闭关期间{ev[0]}。")
-        self.state.chronicle.add(p.age_years, f"闭关{days}日，修为+{int(gained)}。")
-        pill_txt = getattr(r, "pill_line", "")
+        self.state.chronicle.add(p.age_years, f"闭关{days}日，修为+{int(p.exp - exp0)}。")
+        pill_txt = r.pill_line
         bonus_txt = f"（{'、'.join(parts)}）" if parts else ""
         return _accept(
             r,
             f"闭关{days}日（{days // S.DAYS_PER_YEAR}年{days % S.DAYS_PER_YEAR}日）"
             f"{bonus_txt}{pill_txt}，"
-            f"修为 +{int(gained)}，当前 {int(p.exp)}/{cap}{extra}。"
+            f"修为 +{int(p.exp - exp0)}，当前 {int(p.exp)}/{cap}{extra}。"
             f"\n年龄 {p.age_years} 岁 / 寿元 {p.lifespan_years} 岁（余 {p.lifespan_left_years()} 岁）。",
             {"days": days, "exp_before": exp0, "exp_gained": p.exp - exp0,
-             "exp_after": p.exp, "exp_cap": cap, "full": full,
+             "exp_after": p.exp, "exp_cap": cap, "full": full, "capped": capped,
              "mult": mult, "main_bonus": main_bonus,
              "perm_bonus": sum(b for _, b in perm),
              "pill_id": P.JULING if pill_qty else None, "pill_qty": pill_qty,
@@ -1164,7 +1240,14 @@ class Game:
         if success:
             p.realm_idx += 1
             p.exp = 0.0
-            p.lifespan_years = S.LIFESPAN_PER_REALM[p.realm_idx - 1] * p.lifespan_mult
+            # 寿元只按"大境界基准增量"补发（P3.9）：此前直接重置为基准×系数，
+            # 会把突破失败/战败累积的折寿一次性抹平（破境即回满血），
+            # 使"寿元驱动 roguelite"的压力在本世内失效。改为加差额：
+            #   新基准 - 旧基准（小境界通常为 0，跨大境界为正），已折损量得以保留。
+            new_base = S.LIFESPAN_PER_REALM[p.realm_idx - 1] * p.lifespan_mult
+            old_base = S.LIFESPAN_PER_REALM[cur - 1] * p.lifespan_mult
+            p.lifespan_years = max(p.age_years + 5.0,
+                                   p.lifespan_years + (new_base - old_base))
             new_realm = p.realm_name()
             p.heart_demon = max(0, p.heart_demon - 10)  # 突破成功略压心魔
             data.update({"realm_after": p.realm_idx, "realm_name": new_realm,
