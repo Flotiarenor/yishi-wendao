@@ -202,7 +202,7 @@ POST /api/undo  {run_id}          → checkpoint 回溯（会话内，同现逻�
 - [x] 极简 HTML 面板全流程可玩（新局/闭关/参悟/换功法/市场/探索/战斗/回溯/服丹/编年史；原生 JS + REASON_TEXT 错误映射）
 - [x] 每步落盘 + 重启后续玩（RunManager 从 saves/ 恢复；familiarity int 键 JSON 往返修复）
 - [x] 回归：`test_server.py` 69 项；CLI/smoke/tests 全部不受影响（smoke 20 局 18/2、482 场不变）
-- 验收数字：判据 10/10 过（见任务书 `docs/tasks/P3_6-Web壳.md` 验收节与 subagent 报告）
+- 验收数字：判据 10/10 过（见任务书 `docs/archive/tasks/P3_6-Web壳.md` 验收节与 subagent 报告）
 
 ### P3.7 · 正式前端（✅ 已完成 2026-09-09，Vue3 + Vite + Pinia + TS）
 - [x] `frontend/` Vue3+Vite+Pinia+TS 工程；`npm run build`（vue-tsc 类型检查 + vite build）→ `frontend/dist`
@@ -228,7 +228,8 @@ POST /api/undo  {run_id}          → checkpoint 回溯（会话内，同现逻�
 
 ## 11. 相关文档
 
-- 本方案的前置任务书：`docs/tasks/P3_5-动作结果结构化.md`（动手前写，字段级规格同 P3 风格）
+- 前置工作 P3.5（动作结果结构化）由主会话直接实现，**从未落盘任务书**（原计划的
+  `P3_5-动作结果结构化.md` 不存在，勿再引用）；产出见 `docs/实现路线图.md` P3.5 条目。
 - 参考项目：`D:\project\Python\通用架构程序工具组\main.py`（双模式）、
   `shell\backend\file_server.py`（app 工厂 + api 桥 + SPA fallback）
 - 设计定案：§一.2（状态机与叙述分离）、§十三（素材/机制层分离——Web 壳同理属"壳层"）
