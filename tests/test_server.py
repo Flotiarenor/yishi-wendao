@@ -244,6 +244,15 @@ class _Http:
         except urllib.error.HTTPError as e:
             return e.code, e.read().decode("utf-8", "replace")
 
+    def hdr(self, path):
+        """GET → (status, headers)。用于校验缓存头。"""
+        req = urllib.request.Request(self.base + path, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return r.status, {k.lower(): v for k, v in r.headers.items()}
+        except urllib.error.HTTPError as e:
+            return e.code, {k.lower(): v for k, v in e.headers.items()}
+
     def j(self, method, path, payload=None):
         st, raw = self.req(method, path, payload)
         try:
@@ -530,6 +539,14 @@ try:
         check("dist 无 CDN 外部依赖（离线可跑）",
               "http://" not in html.replace("http://www.w3.org", "")
               and "https://" not in html)
+        st, h = http.hdr("/")
+        check("index.html 不缓存（no-cache，重建后普通刷新即生效）",
+              st == 200 and h.get("cache-control") == "no-cache",
+              str(h.get("cache-control")))
+        st, h = http.hdr("/" + js_rel) if js_rel else (0, {})
+        check("哈希资产长缓存（immutable）",
+              st == 200 and "immutable" in h.get("cache-control", ""),
+              str(h.get("cache-control")))
     else:
         # dist 未构建：/ 返回构建提示页（API 不受影响），不是旧 P3.6 面板
         check("dist 未构建时 / 返回构建提示页（旧 P3.6 面板已删除）",

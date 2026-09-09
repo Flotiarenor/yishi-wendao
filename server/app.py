@@ -88,6 +88,22 @@ def create_app(config: dict = None) -> FastAPI:
     manager = RunManager(save_dir=config.get("save_dir"))
     app = FastAPI(title="仙途 · 文字修仙", version="0.3.6")
 
+    # ---------- 缓存策略 ----------
+    # index.html 引用带哈希的 JS/CSS；若浏览器缓存了旧 index.html，重建后普通刷新
+    # 仍会加载旧 JS（用户曾误以为"改了没生效"）。故：HTML 不缓存（每次回源校验），
+    # 带哈希的 /assets/* 长缓存。
+    @app.middleware("http")
+    async def _cache_headers(request, call_next):
+        resp = await call_next(request)
+        path = request.url.path
+        if path.startswith("/api") or path == "/health":
+            return resp
+        if "text/html" in resp.headers.get("content-type", ""):
+            resp.headers["Cache-Control"] = "no-cache"
+        elif path.startswith("/assets/"):
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
+
     # ---------- 健康检查 ----------
     @app.get("/health")
     def health():
