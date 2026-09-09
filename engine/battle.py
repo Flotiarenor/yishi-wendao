@@ -92,6 +92,7 @@ def actor_from_stats(stats: dict, key: str = "player", name: str = "你") -> Act
         speed=stats["speed"], element=stats.get("element", "无"),
         qi=stats.get("qi", 0), qi_max=stats.get("qi_max", 0),
         qi_rate=stats.get("qi_rate", 0.0),
+        stones=stats.get("stones", 0),
     )
 
 

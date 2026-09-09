@@ -249,12 +249,15 @@ class ActionOutcome:
 # 执行器
 # ============================================================
 def can_execute(actor: Actor, target: Actor, action: Action, t: int) -> tuple:
-    """能否执行 → (ok, reason)。条件不满足/灵气不足都给明确原因码。"""
+    """能否执行 → (ok, reason)。条件不满足/灵气不足/灵石不足都给明确原因码。"""
     for cond in action.conditions:
         if not cond(actor, target):
             return False, "condition_failed"
     if action.qi_cost > 0 and actor.qi < action.qi_cost:
         return False, "low_qi"
+    for comp in action.components:
+        if isinstance(comp, Purchase) and actor.stones < comp.cost:
+            return False, "no_stones"
     return True, ""
 
 

@@ -1465,6 +1465,10 @@ class Game:
         p = self.state.player
         e = b.enemy
         tail = []
+        # 0) 先把战斗内的资源变动同步回世界层（战斗中"购灵加速"会扣 b.p.stones），
+        #    再做胜负结算——否则战利品会被这次同步覆盖（历史 bug：每场战斗后灵石归零）。
+        p.qi = max(0.0, min(b.p.qi, BTL.battle_stats(p.realm_idx)["qi_max"]))
+        p.spirit_stones = max(0, int(b.p.stones))
         if outcome == BTL.BATTLE_WIN:
             lo, hi = e.loot_stones
             stones = self.rng.randint(lo, hi, f"battle_loot_stone_{e.id}")
@@ -1505,9 +1509,6 @@ class Game:
                     p.familiarity[gid] = min(
                         S.FAM_MAX, int(p.familiarity.get(gid, 0) + S.FAMILIARITY_PER_USE)
                     )
-        # 灵气/灵石回写世界层（战斗间保留）
-        p.qi = max(0.0, min(b.p.qi, BTL.battle_stats(p.realm_idx)["qi_max"]))
-        p.spirit_stones = max(0, int(b.p.stones))
         self._active_battle = None
         if r.text:
             r.text += "\n" + "\n".join(tail)

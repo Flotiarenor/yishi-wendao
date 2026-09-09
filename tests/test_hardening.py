@@ -15,6 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from content import enemies as EM
 from content import gongfa as G
 from content import pills as P
 from content import sites as ST
@@ -256,6 +257,50 @@ check("用聚灵丹闭关 → pill_line 有内容且非动态属性",
       bool(r.pill_line) and r.data["pill_qty"] > 0, f"{r.pill_line!r}")
 r2 = g.step("cultivate", days=1)
 check("未用丹 → pill_line 为空串", r2.pill_line == "", f"{r2.pill_line!r}")
+
+# ============ G. 战斗结算灵石不丢失（2026-09-10 修复） ============
+print("== G 战斗结算灵石 ==")
+E = EM.by_id(EM.LINGWEN_LANG)
+
+g = new_game(21, stones=1000)
+g.start_battle(E.id)
+check("战斗 Actor 灵石 = 世界灵石（此前 actor_from_stats 漏拷恒为 0）",
+      g.battle().p.stones == 1000, f"{g.battle().p.stones}")
+
+g = new_game(22, stones=1000)
+g.start_battle(E.id)
+g.battle().e.hp = 1
+g.battle().submit("attack")
+r = g.step("battle_skip")
+check("胜利后灵石 > 初始（战利品不再被回写覆盖）",
+      r.battle_over == "win" and g.state.player.spirit_stones > 1000,
+      f"{r.battle_over} {g.state.player.spirit_stones}")
+
+g = new_game(23, stones=1000)
+g.start_battle(E.id)
+b = g.battle()
+ok, reason = b.submit("buy_qi_low")
+check("够灵石时购灵加速可入队", ok, reason)
+b.e.hp = 1
+b.submit("attack")
+g.step("battle_skip")
+check("购买花费扣除且战利品保留（> 980）", g.state.player.spirit_stones > 980,
+      f"{g.state.player.spirit_stones}")
+
+g = new_game(24, stones=1000)
+g.start_battle(E.id)
+r = g.step("battle_action", cmd="flee")
+check("遁走后灵石不变", g.state.player.spirit_stones == 1000,
+      f"{r.battle_over} {g.state.player.spirit_stones}")
+
+g = new_game(25, stones=10)
+g.start_battle(E.id)
+b = g.battle()
+ok, reason = b.submit("buy_qi_high")
+av = [a for a in b.available() if a["key"] == "buy_qi_high"][0]
+check("买不起购灵加速 → no_stones 且动作标记不可用",
+      not ok and reason == "no_stones" and av["available"] is False
+      and av["reason"] == "no_stones", f"{ok} {reason} {av}")
 
 print(f"\n== 结果：{_PASS} 过 / {_FAIL} 败 ==")
 sys.exit(1 if _FAIL else 0)
