@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 
 import EmbeddedPanel from "@/components/EmbeddedPanel.vue";
 import type { GongfaDetail } from "@/types/contract";
@@ -11,31 +11,56 @@ const FAM_MAX = 100;
 const FAM_ENTRY = 10;
 
 const selName = ref("");
-const selSlot = ref("main");
+const rawSlot = ref("");
 
 const owned = computed(() => s.state?.owned || []);
 const detail = computed<GongfaDetail | null>(() => s.detail);
 
-const slotOptions = computed(() => {
+interface SlotOpt {
+  value: string;
+  label: string;
+  occupied: boolean;
+}
+
+/** 槽位候选：战斗类按 战斗1→4（带占用者）；主修/身法各一 */
+const slotOptions = computed<SlotOpt[]>(() => {
   const d = detail.value;
   if (!d) return [];
+  const pool = s.state?.pool;
+  const mk = (value: string, label: string, cur: { id: number | null; name: string | null } | undefined): SlotOpt => ({
+    value,
+    label: cur?.id ? `${label}（${cur.name}）` : label,
+    occupied: !!cur?.id,
+  });
   if (d.slot_type === "battle") {
-    return [1, 2, 3, 4].map((i) => ({ value: `battle${i}`, label: `战斗槽${i}` }));
+    const slots = pool?.battle || [];
+    return [1, 2, 3, 4].map((i) => mk(`battle${i}`, `战斗槽${i}`, slots[i - 1]));
   }
-  if (d.slot_type === "shenfa") return [{ value: "shenfa", label: "身法槽" }];
-  return [{ value: "main", label: "主修位" }];
+  if (d.slot_type === "shenfa") return [mk("shenfa", "身法槽", pool?.shenfa)];
+  return [mk("main", "主修位", pool?.main)];
 });
 
-// 槽位下拉始终选中一个有效项：单一选项直接选中，多选项默认第一项
-// （避免"显示第一项、实际值为旧槽位"的不一致，也免去用户重复点选）
-watch(
-  slotOptions,
-  (opts) => {
-    if (!opts.length) return;
-    if (!opts.some((o) => o.value === selSlot.value)) selSlot.value = opts[0].value;
+/** 默认槽位：优先第一个**空**位（战斗1→4）；全占用则第一个 */
+const defaultSlot = computed(() => {
+  const opts = slotOptions.value;
+  return (opts.find((o) => !o.occupied) || opts[0])?.value || "";
+});
+
+/** 下拉绑定值：永远指向一个有效选项（不留空白；显示与取值一致） */
+const selSlot = computed({
+  get: () => {
+    const opts = slotOptions.value;
+    if (!opts.length) return "";
+    if (rawSlot.value && opts.some((o) => o.value === rawSlot.value)) return rawSlot.value;
+    return defaultSlot.value;
   },
-  { immediate: true },
-);
+  set: (v: string) => {
+    rawSlot.value = v;
+  },
+});
+
+/** 是否还有空槽可装 */
+const hasFreeSlot = computed(() => slotOptions.value.some((o) => !o.occupied));
 
 const canEquip = computed(() => {
   const d = detail.value;
@@ -49,9 +74,8 @@ function open(name: string) {
 function equip() {
   const d = detail.value;
   if (!d) return;
-  const slot = slotOptions.value.some((o) => o.value === selSlot.value)
-    ? selSlot.value
-    : slotOptions.value[0]?.value || "main";
+  const slot = selSlot.value || defaultSlot.value;
+  if (!slot) return;
   void s.learn(d.name, slot);
 }
 function unload() {
@@ -128,9 +152,19 @@ function pct(x: number | undefined) {
             <div class="ops">
               <template v-if="canEquip">
                 <select v-model="selSlot" class="sel">
-                  <option v-for="o in slotOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  <option
+                    v-for="o in slotOptions"
+                    :key="o.value"
+                    :value="o.value"
+                    :disabled="o.occupied"
+                  >
+                    {{ o.label }}
+                  </option>
                 </select>
-                <button class="btn mini primary" :disabled="s.busy" @click="equip">装备</button>
+                <button class="btn mini primary" :disabled="s.busy || !hasFreeSlot" @click="equip">
+                  装备
+                </button>
+                <span v-if="!hasFreeSlot" class="dim small">槽位已满，先卸下一个</span>
                 <button class="btn mini" :disabled="s.busy" @click="s.comprehend(detail.name, 5)">
                   参悟入门（5 日）
                 </button>

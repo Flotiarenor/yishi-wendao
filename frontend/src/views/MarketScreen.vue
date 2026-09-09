@@ -20,6 +20,7 @@ function ownedQty(name: string): number {
     .filter((i) => i.name === name)
     .reduce((a, b) => a + b.qty, 0);
 }
+
 function qtyOf(name: string): number {
   return Math.max(1, Math.min(99, qty.value[name] ?? 1));
 }
@@ -141,15 +142,15 @@ const gongfa = computed<MarketGongfa[]>(() => market.value?.gongfa || []);
               </template>
               <span v-else class="dim">境界未至，仅识其名</span>
             </td>
-            <td class="mono dim">{{ ownedQty(g.name) }}</td>
+            <td class="mono dim">{{ g.owned ? "是" : "—" }}</td>
             <td>
               <button
                 class="btn mini"
-                :disabled="!s.canAct || !canAfford(g.price, g.name) || ownedQty(g.name) > 0"
-                :title="ownedQty(g.name) > 0 ? '已拥有（不可重复购买）' : canAfford(g.price, g.name) ? '' : '灵石不足'"
+                :disabled="!s.canAct || !canAfford(g.price, g.name) || g.owned"
+                :title="g.owned ? '已拥有（不可重复购买）' : canAfford(g.price, g.name) ? '' : '灵石不足'"
                 @click="buy(g.name)"
               >
-                {{ ownedQty(g.name) > 0 ? "已拥有" : "购买" }}
+                {{ g.owned ? "已拥有" : "购买" }}
               </button>
             </td>
           </tr>

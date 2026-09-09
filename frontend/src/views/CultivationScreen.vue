@@ -18,6 +18,7 @@ const s = useSessionStore();
 const ui = useUiStore();
 
 const FAM_MAX = 100;
+const JULING_DAYS_PER_PILL = 10;
 const cultivateDays = ref(30);
 const usePill = ref(false);
 const cwDays = ref(5);
@@ -25,6 +26,20 @@ const ageDays = ref(30);
 
 const st = computed(() => s.state);
 const canAct = computed(() => s.canAct);
+
+// 聚灵丹存量：为 0 时禁用并自动取消勾选（避免"勾了没丹/看不出是否生效"）
+const julingQty = computed(() =>
+  (st.value?.inventory || [])
+    .filter((i) => i.name === "聚灵丹")
+    .reduce((a, b) => a + b.qty, 0),
+);
+watch(
+  julingQty,
+  (n) => {
+    if (n <= 0) usePill.value = false;
+  },
+  { immediate: true },
+);
 
 // ---- 参悟目标：由 store 记住（跨刷新/跨页保持） ----
 const cwTarget = computed({
@@ -123,7 +138,14 @@ function doAgePass() {
           <legend>闭关修炼</legend>
           <p class="desc dim">按天推进，修为按「闭关效率 × 资质」累积；圆满的那天自动封顶。</p>
           <label>天数 <input v-model.number="cultivateDays" type="number" min="1" max="3650" class="num" /></label>
-          <label class="chk"><input v-model="usePill" type="checkbox" /> 用聚灵丹（闭关加速）</label>
+          <label class="chk">
+            <input v-model="usePill" type="checkbox" :disabled="julingQty === 0" />
+            用聚灵丹（闭关加速，现有 {{ julingQty }}）
+          </label>
+          <span v-if="julingQty === 0" class="dim small">（背包无聚灵丹，可在坊市购买）</span>
+          <span v-else-if="usePill" class="dim small">
+            每 {{ JULING_DAYS_PER_PILL }} 天消耗 1 颗，覆盖时段修炼加速 +50%
+          </span>
           <div class="ops">
             <button class="btn mini primary" :disabled="!canAct" @click="doCultivate">闭关</button>
             <span v-if="btInfo && !btInfo.expFull" class="dim small">

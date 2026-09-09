@@ -78,10 +78,10 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
   `engine/rules.py` 纯函数五段乘区 + `engine/action.py` 动作模型（组件/条件/前摇打断）+
   `engine/battle.py` 时间轴战斗（决策窗口 + 队列 + 敌方插入 + 统一灵兽进攻）+
   `content/actions.py` 动作数据化 + `tools/dummy.py` 木桩；CLI 下线（存档 I/O 迁 `server/`）。
-  基线：`test_effects` 39 + `test_hardening` 65 + `test_clock` 59 + `test_action` 53 +
-  `test_battle_time` 42 + `test_gongfa_deep` 91 + `test_server` 79 = **428 项**
-  （+ `test_content_tools` 32 + `test_replay` 16 = **476 项**）；
-  smoke 20 局 = **19 通关/1 道陨、436 场、平均终档 24.4**
+  基线：`test_effects` 39 + `test_hardening` 75 + `test_clock` 59 + `test_action` 53 +
+  `test_battle_time` 42 + `test_gongfa_deep` 91 + `test_server` 79 = **438 项**
+  （+ `test_content_tools` 32 + `test_replay` 16 = **486 项**）；
+  smoke 20 局 = **19 通关/1 道陨、425 场、平均终档 24.4**
 - ✅ **P4-R4** 状态效果补全（**修复 R3 回归**）：新增 `engine/status.py` 行为注册表
   （damage_mult / hit_negate / push_back / speed_mult 四类，倍率取 `ApplyStatus.params`）——
   `guard`（守方乘区）、`evade`（命中判定，battle 按行动实例派生 `hit_roll`）、`root`/`stun`
@@ -102,6 +102,12 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
   （只扣战斗内花费，不整体覆盖，对以后加战斗内消费更稳）；下拉框默认选中
   （书库槽位/读档显示当前存档/参悟目标）。`test_battle_time` 42、`test_hardening` 65、
   前端 E2E 28 项。
+- ✅ **P4-R7** 交互修复（2026-09-10，用户反馈）：① 坊市功法"已有"改由服务端 `owned` 字段判定
+  （此前前端按背包名反查 → 永远 0）；② 闭关封顶改为**含聚灵丹**计算"刚好圆满的天数"，
+  丹药按**实际天数**消耗（每 10 天 1 颗、受背包限制、覆盖时段 +50%），返回 `pill_qty`/`pill_days`；
+  ③ 修炼页显示聚灵丹存量、无丹禁用并自动取消勾选、闭关后 toast 反馈；④ 书库槽位下拉改为
+  **永不留空**的 computed（优先空位 战斗1→4，占用项禁用）。`test_hardening` 75（+10）、
+  前端 E2E 29（+1）；smoke 20 局 = 19/1、425 场、均终档 24.4。
 - ✅ **P3.7** 正式前端（Vue3 + Vite + Pinia + TS，`frontend/`）：FastAPI 伺服 `frontend/dist`（SPA fallback，`/api` 404 不被吞）；布局 = **左状态（含切换按钮）/ 中上主内容（地图为主页面）/ 中下叙事日志（可拖拽高度）**，遇敌时**战斗临时接管主内容区**（时间轴 / 决策窗口 / 队列入队-执行 / 双方效果 / 动作可用性，常用动作在上、技能折叠）+ **修炼页**（闭关/参悟/突破/静养，参悟选择记忆）+ 坊市（灵石/背包/购买数量/买不起置灰）+ 书库（详情/装备/卸下）+ 编年史时间线 + 状态面板（五行亲和/业力）；旧 P3.6 极简面板删除（`server/static`）；顺带修复 `gongfa_detail` 对 7/12 功法抛 500 的 `SkillSpec.element` bug；`tests/test_server.py` 79 项 + 前端 E2E 27 项
 - ⬜ **P4 起未做**（详见 `docs/实现路线图.md`）：突破考验（P4）、五行宝光（P5）、死亡转世（P6）、人物势力（P7）、事件化（P8）、生成器（P9）、平衡标定（P10）、pywebview 桌面壳
 - ✅ **工具链（2026-09-10）**：`tools/content_check.py` 内容校验器（当前 0 错误 / 10 警告，

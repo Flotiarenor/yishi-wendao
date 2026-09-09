@@ -174,6 +174,8 @@ export interface MarketPill {
 }
 
 export interface MarketGongfa {
+  /** 是否已拥有（服务端判定，勿在前端按背包名反查） */
+  owned: boolean;
   id: number;
   name: string;
   price: number;

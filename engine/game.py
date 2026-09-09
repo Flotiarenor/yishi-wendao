@@ -745,6 +745,7 @@ class Game:
                 "slot_type": gf.slot_type,
                 "slot_label": G.SLOT_LABELS.get(gf.slot_type, gf.slot_type),
                 "readable": readable,
+                "owned": gf.id in (p.owned_gongfa or []),
                 "skill_count": len(gf.skill_ids) if readable else None,
                 "cultivate_bonus": gf.cultivate_bonus if readable else None,
                 "permanent_bonus": gf.permanent_bonus if readable else None,
@@ -1109,11 +1110,14 @@ class Game:
 
     # ---------- 闭关修炼 ----------
     def _cultivate(self, days: int, use_pill: bool = False) -> Result:
-        """闭关修炼。
+        """闭关修炼（P4-R7：封顶与聚灵丹统一按"实际闭关天数"结算）。
 
-        P3.9 修为封顶：修为不会超过 exp_cap——若请求天数会冲破上限，则只闭关到
-        "刚好圆满的那一天"（days 收敛为实际天数、天数照实推进），多余的闭关不再
-        产生溢出修为（此前溢出无上限、无提示，等于白扔寿元）。
+        设计要点：
+          1. **封顶**：先算"刚好圆满需要几天"（**含聚灵丹加速**），请求天数收敛到那一天；
+             多余天数不推进、不浪费寿元。
+          2. **聚灵丹**：每 `JULING_DAYS_PER_PILL` 天消耗 1 颗，覆盖时段内日率 ×(1+bonus)；
+             只按**实际闭关天数**消耗，且受背包数量限制（不够则后半段按基础日率）。
+          3. 返回值带 `pill_qty`（实际消耗）/`pill_days`（被加速天数），供 UI 反馈。
         """
         r = Result()
         days = max(S.CULTIVATE_MIN_DAYS, min(days, 3650))
@@ -1121,27 +1125,49 @@ class Game:
         if not p.alive:
             r.game_over = True
             return _reject(r, R_GAME_OVER, "你已身死道消。")
-        mult = cultivation_mult(p)
+        mult = cultivation_mult(p)                 # 基础倍率（不含丹药）
+        base_rate = S.BASE_DAILY_EXP * mult
         cap = p.exp_cap()
-        # ---- 修为封顶：收敛天数到"圆满那一天"（已圆满则不再闭关）----
-        # 注意浮点：exp 由多次 天数×BASE×mult 累加而来，可能停在 cap−1e-13
-        # （如 2078.9999999999995 / 2079）。若只判 p.exp >= cap，"刚好差一点"会
-        # 永远进不了"已圆满"分支 → 闭关 0 天、天数不推进 → 调用方（bot/玩家）空转。
-        # 故这里做一次 epsilon 吸附，让"算术上已满"与"浮点上相等"同义。
         EPS = 1e-9
-        capped = False
+
+        # ---- 已圆满：不推进时间 ----
         if cap - p.exp <= EPS:
             p.exp = float(cap)
-            capped = True
-            days = 0
-        else:
-            per_day = S.BASE_DAILY_EXP * mult
-            if per_day > 0:
-                need_days = math.ceil((cap - p.exp) / per_day - EPS)
-                if need_days < days:
-                    # need_days ≤ 0 = 不足一日即圆满 → 不推进（避免"1 天溢出"破坏封顶不变量）
-                    days = max(0, need_days)
-                    capped = True
+            return _accept(
+                r,
+                f"你已修为圆满（{int(p.exp)}/{cap}），无需再闭关——"
+                f"尝试突破：b（突破前先备齐灵石/突破丹）。",
+                {"days": 0, "exp_before": p.exp, "exp_gained": 0.0,
+                 "exp_after": p.exp, "exp_cap": cap, "full": True,
+                 "mult": mult, "main_bonus": 1.0, "perm_bonus": 0.0,
+                 "pill_id": None, "pill_qty": 0, "pill_days": 0,
+                 "capped": True, "event": None},
+            )
+
+        # ---- 聚灵丹：可用颗数 → 加速窗口 ----
+        pill = P.by_id(P.JULING)
+        pill_bonus = float(pill.effect.get("cultivate_bonus", 0.0))
+        avail = p.item_count(P.JULING) if use_pill else 0
+        boost_cap_days = avail * S.JULING_DAYS_PER_PILL
+        boost_rate = base_rate * (1 + pill_bonus)
+
+        def exp_for(d: int) -> float:
+            boosted = min(d, boost_cap_days)
+            return boost_rate * boosted + base_rate * (d - boosted)
+
+        # ---- 封顶：收敛到"刚好圆满的那一天"（含丹药） ----
+        capped = False
+        if base_rate > 0:
+            remaining = cap - p.exp
+            if boost_cap_days > 0 and boost_rate * boost_cap_days >= remaining:
+                need = math.ceil(remaining / boost_rate - EPS)
+            else:
+                rest = remaining - boost_rate * boost_cap_days
+                need = boost_cap_days + (math.ceil(rest / base_rate - EPS) if rest > 0 else 0)
+            if need < days:
+                days = max(0, need)
+                capped = True
+
         if days <= 0:
             return _accept(
                 r,
@@ -1150,10 +1176,21 @@ class Game:
                 {"days": 0, "exp_before": p.exp, "exp_gained": 0.0,
                  "exp_after": p.exp, "exp_cap": cap, "full": True,
                  "mult": mult, "main_bonus": 1.0, "perm_bonus": 0.0,
-                 "pill_id": None, "pill_qty": 0, "capped": True, "event": None},
+                 "pill_id": None, "pill_qty": 0, "pill_days": 0,
+                 "capped": True, "event": None},
             )
+
+        # ---- 扣丹：按实际闭关天数（向上取整，受背包限制） ----
+        pill_qty = 0
+        pill_days = 0
+        if avail > 0:
+            pill_qty = min(avail, max(1, math.ceil(days / S.JULING_DAYS_PER_PILL)))
+            p.remove_item(P.JULING, pill_qty)
+            pill_days = min(days, pill_qty * S.JULING_DAYS_PER_PILL)
+            r.pill_line = f"（闭关消耗【{pill.name}】×{pill_qty}，{pill_days} 日修炼加速）"
+
+        # ---- 加成说明 ----
         parts = []
-        # 主修与道基被动的加成说明（闭关文本两段）
         perm = sorted(
             (g, G.GONGFA[g].permanent_bonus) for g, f in p.familiarity.items()
             if f >= S.FAM_ENTRY and g in G.GONGFA and G.GONGFA[g].permanent_bonus > 0
@@ -1166,25 +1203,18 @@ class Game:
             if gf is not None:
                 main_bonus = 1 + gf.cultivate_bonus
                 parts.append(f"主修【{gf.name}】×{main_bonus:.2f}")
-        # 聚灵丹：闭关时加速（每 JULING_DAYS_PER_PILL 天消耗一颗）
-        pill_qty = 0
-        if use_pill and p.item_count(P.JULING) > 0:
-            pill = P.by_id(P.JULING)
-            pill_bonus = pill.effect.get("cultivate_bonus", 0.0)
-            consume = max(1, days // S.JULING_DAYS_PER_PILL)
-            consume = min(consume, p.item_count(P.JULING))
-            p.remove_item(P.JULING, consume)
-            pill_qty = consume
-            mult *= 1 + pill_bonus * consume
-            r.pill_line = f"（闭关消耗【{pill.name}】×{consume}，修炼加速）"
+        if pill_qty:
+            parts.append(f"聚灵丹×{pill_qty}（+{int(pill_bonus * 100)}%）")
+
+        # ---- 结算 ----
         exp0 = p.exp
-        gained = days * S.BASE_DAILY_EXP * mult
+        gained = exp_for(days)
         p.exp += gained
         self._advance_days(days)
         if cap - p.exp <= EPS:
             p.exp = float(cap)          # 浮点吸附：算术已满 → 与 cap 严格相等
         full = p.exp >= cap
-        extra = (f"，修为已圆满可尝试突破" if full else "")
+        extra = "，修为已圆满可尝试突破" if full else ""
         if capped and not full:
             extra = "（闭关已至圆满之日，多余天数未再推进）"
         # 偶尔的闭关小事件（心魔/顿悟）——先极简
@@ -1201,20 +1231,18 @@ class Game:
             event = ev[0]
             self.state.chronicle.add(p.age_years, f"闭关期间{ev[0]}。")
         self.state.chronicle.add(p.age_years, f"闭关{days}日，修为+{int(p.exp - exp0)}。")
-        pill_txt = r.pill_line
         bonus_txt = f"（{'、'.join(parts)}）" if parts else ""
         return _accept(
             r,
             f"闭关{days}日（{days // S.DAYS_PER_YEAR}年{days % S.DAYS_PER_YEAR}日）"
-            f"{bonus_txt}{pill_txt}，"
-            f"修为 +{int(p.exp - exp0)}，当前 {int(p.exp)}/{cap}{extra}。"
+            f"{bonus_txt}，修为 +{int(p.exp - exp0)}，当前 {int(p.exp)}/{cap}{extra}。"
             f"\n年龄 {p.age_years} 岁 / 寿元 {p.lifespan_years} 岁（余 {p.lifespan_left_years()} 岁）。",
             {"days": days, "exp_before": exp0, "exp_gained": p.exp - exp0,
              "exp_after": p.exp, "exp_cap": cap, "full": full, "capped": capped,
              "mult": mult, "main_bonus": main_bonus,
              "perm_bonus": sum(b for _, b in perm),
              "pill_id": P.JULING if pill_qty else None, "pill_qty": pill_qty,
-             "event": event},
+             "pill_days": pill_days, "event": event},
         )
 
     # ---------- 突破 ----------

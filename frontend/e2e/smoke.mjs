@@ -200,6 +200,24 @@ try {
       const sel2 = document.querySelector(".main-slot select");
       check("4 动作后参悟选择保持不变（不再被打回第一项）", sel2 && sel2.value === cwName, `${cwName} → ${sel2?.value}`);
       check("4 参悟目标写入 localStorage", !!dom.window.localStorage.getItem("xiuxian.cwGongfa"));
+      // 参悟入门 → 书库槽位下拉应出现且不留空（用户报"书库空白选项"回归）
+      const cwBtn = byText(".main-slot button", "参悟");
+      if (cwBtn) {
+        click(cwBtn);
+        await sleep(1200);
+        const libBtn = byText(".quick button", "书库");
+        if (libBtn) {
+          click(libBtn);
+          await sleep(600);
+          const item = document.querySelector(".main-slot .item");
+          if (item) {
+            click(item);
+            await sleep(700);
+            const slotSel = document.querySelector(".main-slot .detail select");
+            check("4 书库槽位下拉不留空", !!slotSel && !!slotSel.value, `value=${slotSel?.value}`);
+          }
+        }
+      }
     }
   }
 

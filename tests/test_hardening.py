@@ -320,5 +320,62 @@ check("battle_clear 清空队列", r3.ok is True and r3.data["queue"] == [])
 r4 = g.step("explore", site=str(ST.LINGMAI))
 check("战斗中日常动作仍被拒", r4.ok is False and r4.reason == "in_battle")
 
+# ============ I. 坊市"已拥有"标记 ============
+print("== I 坊市已拥有标记 ==")
+g = new_game(41, stones=5000)
+g.state.player.location = ST.SHISHI
+md = g.step("market").data
+
+
+def _gf(data, name):
+    return next(x for x in data["gongfa"] if x["name"] == name)
+
+
+check("未购功法 owned=False", _gf(md, "炎阳诀")["owned"] is False)
+g.step("buy", item=str(G.YANYANG_JUE), qty=1)
+md2 = g.step("market").data
+check("购得后 owned=True", _gf(md2, "炎阳诀")["owned"] is True)
+check("未购的其它功法仍 owned=False", _gf(md2, "玄水真经")["owned"] is False)
+
+# ============ J. 聚灵丹与封顶（P4-R7） ============
+print("== J 聚灵丹与封顶 ==")
+g = new_game(51)
+p = p_of(g)
+p.add_item(P.JULING, 5)
+cap = p.exp_cap()
+r = g.step("cultivate", days=365, use_pill=True)
+check("有丹闭关到圆满：exp == cap", abs(p.exp - cap) < 1e-6, f"{p.exp}/{cap}")
+check("有丹闭关：天数收敛（capped=True 且 <365）",
+      r.data["capped"] is True and r.data["days"] < 365,
+      f"days={r.data['days']} capped={r.data['capped']}")
+check("有丹闭关：扣丹数与加速天数一致",
+      r.data["pill_qty"] > 0 and r.data["pill_days"] > 0,
+      f"qty={r.data['pill_qty']} days={r.data['pill_days']}")
+check("有丹闭关：剩余丹药 = 5 − 消耗",
+      p.item_count(P.JULING) == 5 - r.data["pill_qty"], f"{p.item_count(P.JULING)}")
+
+g = new_game(52)
+r = g.step("cultivate", days=10, use_pill=True)
+check("无丹勾选：pill_qty=0 且正常闭关",
+      r.data["pill_qty"] == 0 and r.data["days"] == 10,
+      f"qty={r.data['pill_qty']} days={r.data['days']}")
+
+g = new_game(53)
+p = p_of(g)
+p.add_item(P.JULING, 3)
+r = g.step("cultivate", days=5, use_pill=True)
+check("短闭关（5 天）只扣 1 颗",
+      r.data["pill_qty"] == 1 and p.item_count(P.JULING) == 2,
+      f"qty={r.data['pill_qty']} left={p.item_count(P.JULING)}")
+
+g1 = new_game(54)
+r1 = g1.step("cultivate", days=10)
+g2 = new_game(54)
+p_of(g2).add_item(P.JULING, 1)
+r2 = g2.step("cultivate", days=10, use_pill=True)
+check("聚灵丹加速生效（同 10 天修为更高）",
+      r2.data["exp_gained"] > r1.data["exp_gained"],
+      f"{r1.data['exp_gained']} → {r2.data['exp_gained']}")
+
 print(f"\n== 结果：{_PASS} 过 / {_FAIL} 败 ==")
 sys.exit(1 if _FAIL else 0)

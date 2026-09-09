@@ -295,12 +295,15 @@ export const useSessionStore = defineStore("session", {
     async cultivate(days: number, usePill: boolean) {
       const r = await this.run(...actions.cultivate(days, usePill));
       if (r?.ok) {
-        const d = r.data as { days?: number; capped?: boolean; exp_gain?: number };
+        const ui = useUiStore();
+        const d = r.data as { days?: number; capped?: boolean; pill_qty?: number };
+        if (d.pill_qty) {
+          ui.notify(`闭关消耗【聚灵丹】×${d.pill_qty}，修炼加速已生效。`, "ok");
+        } else if (usePill) {
+          ui.notify("背包没有聚灵丹，已按普通闭关结算。", "err");
+        }
         if (d.capped && typeof d.days === "number") {
-          useUiStore().notify(
-            `闭关 ${d.days} 日即已圆满（请求天数已封顶），可考虑突破。`,
-            "info",
-          );
+          ui.notify(`闭关 ${d.days} 日即已圆满（天数已封顶），可考虑突破。`, "info");
         }
       }
       return r;
