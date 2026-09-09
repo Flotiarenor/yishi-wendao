@@ -671,28 +671,6 @@ class WorldMap:
             cy = _N - 1
         return self.base_terrain_at(*center_of(cx, cy))
 
-    def terrain_at(self, x: float, y: float, with_roads: bool = True) -> int:
-        """任意**连续坐标** → 地形 id（覆盖层优先，否则连续噪声采样）。
-
-        P4-T2-R1：地形不再"按格取常数"——同一格内不同坐标可以有不同地形。
-        覆盖层（路网 / 城镇）本阶段仍按特征格判定（R2 改折线几何）。
-        """
-        self._ensure_terrain()
-        if with_roads:
-            self._ensure_roads()
-        else:
-            self._ensure_towns()
-        cx, cy = cell_of(x, y)
-        idx = cy * _N + cx
-        if with_roads:
-            t = self._road_cells.get(idx)
-            if t is not None:
-                return t
-        t = self._town_cells.get(idx)
-        if t is not None:
-            return t
-        return classify_point(self.world_seed, x, y)
-
     def _cell_terrain(self, cx: int, cy: int) -> int:
         """格 → **特征地形** id；该格若无特征（= 纯噪声分类）返回 -1。
 
@@ -737,6 +715,8 @@ class WorldMap:
             return t
         if t == _T_FORD:
             return t
+        if self._road_cells.get(idx) == _T_FORD:
+            return _T_FORD                # 路网跨水处（桥 / 渡）——优先于河流与湖泊
         tt = self._town_cells.get(idx)
         if tt is not None:
             return tt
@@ -763,6 +743,8 @@ class WorldMap:
             return t                      # 世界边界 / 禁制：硬阻挡优先
         if t == _T_FORD:
             return t                      # 渡口按格（保证 MAINLAND 连通）
+        if self._road_cells.get(idx) == _T_FORD:
+            return _T_FORD                # 路网跨水处（桥 / 渡）——优先于河流与湖泊
         tt = self._town_cells.get(idx)
         if tt is not None:
             return tt
