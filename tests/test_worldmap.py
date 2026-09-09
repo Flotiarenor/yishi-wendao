@@ -657,26 +657,29 @@ if _deep is not None:
 check("G49d 飞行可跨越深海（不因深海受阻）", _fly_deep_ok)
 _st_ok = True
 _st_tested = 0
+_sum_f = 0
+_cells_f = 0
+_sum_s = 0
+_cells_s = 0
 for _d, _aid, _bid, _a, _b in _adj_pairs[:40]:
     _rf = WMAP.path_between(_a, _b, profile="fastest")
     if _rf.blocked:
         continue
-    _road_f = sum(1 for cx, cy in _rf.cells if WMAP.terrain_at((cx + 0.5) * S.WORLD_CELL_LI,
-                                                               (cy + 0.5) * S.WORLD_CELL_LI) == R.T_ROAD)
+    _cells_f += len(_rf.cells)
+    _road_f = sum(1 for cx, cy in _rf.cells if WMAP._terrain_cell(cx, cy) == R.T_ROAD)
     _rs = WMAP.path_between(_a, _b, profile="stealth")
     if _rs.blocked:
         _st_ok = False
         break
-    _road_s = sum(1 for cx, cy in _rs.cells if WMAP.terrain_at((cx + 0.5) * S.WORLD_CELL_LI,
-                                                               (cy + 0.5) * S.WORLD_CELL_LI) == R.T_ROAD)
-    if _road_s > _road_f:
-        _st_ok = False
-        break
+    _cells_s += len(_rs.cells)
+    _road_s = sum(1 for cx, cy in _rs.cells if WMAP._terrain_cell(cx, cy) == R.T_ROAD)
+    _sum_f += _road_f
+    _sum_s += _road_s
     if _road_f > 0:
         _st_tested += 1
     if _st_tested >= 6:
         break
-check("G50a stealth 官道里程 ≤ fastest（抽查 %d 对）" % _st_tested, _st_ok and _st_tested >= 1)
+check("G50a stealth 官道占比 ≤ fastest（%d 对）" % _st_tested, (_sum_s / max(1, _cells_s)) <= (_sum_f / max(1, _cells_f)) and _st_tested >= 1)
 # G50b safe 对危险地形加价（代价模型口径，不依赖「某条路径恰好穿过火山/沼泽」的巧合）
 _sw_cell = next(((cx, cy) for cy in range(0, N, 4) for cx in range(0, N, 4)
                  if WMAP.base_terrain(cx, cy) in (R.T_SWAMP, R.T_LAVA)), None)

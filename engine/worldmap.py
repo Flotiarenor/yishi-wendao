@@ -262,10 +262,42 @@ def _clamp01(v: float) -> float:
 
 
 def _domain_bias_at(x: float, y: float) -> tuple:
-    """域级场偏置 (elev, moist, temp, fire)。"""
-    fb = R.DOMAINS[R.domain_at_xy(x, y)].field_bias
-    return (fb.get("elev", 0.0), fb.get("moist", 0.0),
-            fb.get("temp", 0.0), fb.get("fire", 0.0))
+    """域级场偏置——**双线性平滑**（2026-09-10：修"地图上的切片/断层痕迹"）。
+
+    域是 5×5 方格。若把偏置按域硬加，边界会出现阶跃（实测 elev 在 x=8000 处跳 +0.02，
+    temp 最大 ±0.14）→ 地图上出现沿域边界的直线断层。这里按**域中心**做双线性插值，
+    过渡自然。域仍是离散概念（五行浓度 / 势力归属等照旧按域判定）。
+    """
+    g = S.DOMAIN_GRID
+    fx = x / S.DOMAIN_LI - 0.5
+    fy = y / S.DOMAIN_LI - 0.5
+    ix = int(math.floor(fx))
+    iy = int(math.floor(fy))
+    tx = fx - ix
+    ty = fy - iy
+
+    def _at(px: int, py: int) -> tuple:
+        if px < 0:
+            px = 0
+        elif px > g - 1:
+            px = g - 1
+        if py < 0:
+            py = 0
+        elif py > g - 1:
+            py = g - 1
+        fb = R.DOMAINS[py * g + px].field_bias
+        return (fb.get("elev", 0.0), fb.get("moist", 0.0),
+                fb.get("temp", 0.0), fb.get("fire", 0.0))
+
+    b00 = _at(ix, iy)
+    b10 = _at(ix + 1, iy)
+    b01 = _at(ix, iy + 1)
+    b11 = _at(ix + 1, iy + 1)
+    return tuple(
+        (b00[k] * (1.0 - tx) + b10[k] * tx) * (1.0 - ty)
+        + (b01[k] * (1.0 - tx) + b11[k] * tx) * ty
+        for k in range(4)
+    )
 
 
 def sample_fields(seed: int, x: float, y: float) -> tuple:
@@ -534,7 +566,7 @@ PROFILES: dict = {
                 "forest_mult": 1.0, "water": "realm", "fly": False},
     "safe": {"desc": "按地形危险度加权（×1+3×danger）", "danger": True, "road_mult": 1.0,
              "forest_mult": 1.0, "water": "realm", "fly": False},
-    "stealth": {"desc": "避开官道、偏爱林地（暴露低）", "danger": False, "road_mult": 2.5,
+    "stealth": {"desc": "避开官道、偏爱林地（暴露低）", "danger": False, "road_mult": 6.0,
                 "forest_mult": 0.85, "water": "realm", "fly": False, "exposure_mult": 3.0},
     "fly": {"desc": "飞行：忽略地形，仅禁制 / 虚空阻挡", "danger": False, "road_mult": 1.0,
             "forest_mult": 1.0, "water": "always", "fly": True},
@@ -758,6 +790,17 @@ class WorldMap:
             tt = self._road_at(x, y)
             if tt:
                 return tt
+            # **格级采样**：只要格内有路经过就算路——路宽仅 0.02 里，
+            # 若只按格心判定，50 里格的代价场几乎感知不到路网（stealth/fastest 会失效）。
+            # 点级 `terrain_at(x, y)` 仍按真实路面宽度判定（定案 §4.4）。
+            if self._road_idx is None:
+                self._ensure_roads()
+            segs = self._road_idx.get(idx)
+            if segs:
+                for _s in segs:
+                    if _s[5] == _T_ROAD:
+                        return _T_ROAD
+                return _T_TRAIL
         if t > 0:
             return t                      # 湖泊（面积型特征）
         return classify_point(self.world_seed, x, y)
@@ -883,12 +926,7 @@ class WorldMap:
             for cx in range(n):
                 x = (cx + 0.5) * _CELL_LI
                 d = R.domain_of_cell(cx, cy)
-                bias = bias_cache.get(d)
-                if bias is None:
-                    fb = R.DOMAINS[d].field_bias
-                    bias = (fb.get("elev", 0.0), fb.get("moist", 0.0),
-                            fb.get("temp", 0.0), fb.get("fire", 0.0))
-                    bias_cache[d] = bias
+                bias = _domain_bias_at(x, y)      # 双线性平滑，与查询路径同一函数
                 e = _contrast(fbm(seed, x, y, _PERIOD_ELEV, _OCT_ELEV, "elev")) + bias[0]
                 m = _contrast(fbm(seed, x, y, _PERIOD_MOIST, _OCT_MOIST, "moist")) + bias[1]
                 t0 = _contrast(fbm(seed, x, y, _PERIOD_TEMP, _OCT_TEMP, "temp"))
