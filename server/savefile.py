@@ -1,11 +1,11 @@
-"""存档管理（I/O 层，只在 CLI/会话层使用，engine 保持纯净）。
+"""存档管理（I/O 层，只在会话层使用；engine 保持纯净、零 I/O）。
 
 - saves/run_<seed>.json    本世当前状态
 - saves/run_<seed>.cp.json 最近一个节点（回溯用）
 
 所有函数都支持可选的 save_dir 参数（默认 = 项目 saves/ 目录）：
-P3.6 起 server 会话层与测试用它注入自定义目录（如临时目录），
-存档文件格式不变（不改其格式、不复制实现）。
+server 会话层与测试用它注入自定义目录（如临时目录），存档文件格式不变。
+（R3.4 起本模块位于 server/；CLI 已下线。）
 """
 import json
 import os

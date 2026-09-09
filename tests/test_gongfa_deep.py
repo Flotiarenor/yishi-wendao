@@ -29,7 +29,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from content import actions as CA
 from content import enemies as EM
+from engine import rules as R
 from content import gongfa as G
 from content import pills as P
 from content import sites as ST
@@ -122,17 +124,47 @@ def learn(g: Game, name: str, slot: str = "main"):
 
 
 def pool_ids(g: Game) -> set:
-    return {s.id for s in g.battle().available_skills()}
+    """当前战斗动作池里的技能 id 集合（R3：从动作池读，而非旧 available_skills）。"""
+    b = g.battle()
+    return {a.id for a in b.actions.values() if a.id is not None}
 
 
 def make_battle(enemy_id: int, realm: int = 1, skills=None, qi=None, rng=None):
+    """构造一场战斗（R3 时间轴 Battle）。skills 为 SkillSpec 列表。"""
     e = EM.ENEMIES[enemy_id]
     if skills is None:
         skills = [SK.by_id(SK.LINGLI_CHONGJI), SK.by_id(SK.HUTI_LINGGUANG)]
     ps = BTL.battle_stats(realm)
     if qi is not None:
         ps["qi"] = qi
-    return BTL.Battle(ps, skills, e, rng or FakeRng())
+    acts = list(CA.BASIC_ACTIONS) + [s.action for s in skills]
+    return BTL.Battle(ps, acts, e, rng or FakeRng(), battle_id=1,
+                      enemy_actions=list(CA.ENEMY_ACTIONS))
+
+
+def cast(g_or_b, skill_id=None, cmd="attack", windows: int = 8):
+    """在战斗里施放一个动作并跑到结束/多轮（R3：队列式）。
+
+    返回 (叙事文本, 是否结束, 结局)。
+    """
+    b = g_or_b if isinstance(g_or_b, BTL.Battle) else g_or_b.battle()
+    key = None
+    if skill_id is not None:
+        sk = SK.SKILLS.get(skill_id) if isinstance(skill_id, int) else None
+        key = sk.key if sk else None
+    if key is None:
+        key = {"attack": "attack", "defend": "defend",
+               "gather": "gather", "flee": "flee"}.get(cmd, cmd)
+    texts = []
+    for _ in range(windows):
+        if b.ended():
+            break
+        ok, reason = b.submit(key)
+        if not ok:
+            return (f"（无法施展：{reason}）", b.ended(), b.outcome())
+        rep = b.run_window()
+        texts.extend(rep.lines)
+    return ("\n".join(texts), b.ended(), b.outcome())
 
 
 # ============ 1. 理解锁派生 ============
@@ -223,11 +255,10 @@ g.start_battle(EM.LINGWEN_LANG)
 ids = pool_ids(g)
 check("battle 槽功法技能入池（温和）", SK.ZHUIYUE_ZHANG in ids and SK.SHIFU_JIA in ids)
 g.rng = FakeRng(roll=0.5, chance=True)
-e_hp0 = g.battle().e_hp
+e_hp0 = g.battle().e.hp
 r = g.step("battle_action", cmd="skill", skill_id=SK.ZHUIYUE_ZHANG)
 check("battle 槽功法技能可实际施放（ok + 敌HP下降）",
-      r.ok is True and r.data["skill_id"] == SK.ZHUIYUE_ZHANG
-      and r.data["battle"]["enemy_hp"] < e_hp0)
+      r.ok is True and g.battle() is not None and g.battle().e.hp < e_hp0)
 g.quit_battle()
 # shenfa 槽功法（御风步法 → 御风术 evade）
 buy(g, "御风步法")
@@ -282,72 +313,54 @@ ids = pool_ids(g)
 check("无任何功法 → free 攻/防恒在池",
       SK.LINGLI_CHONGJI in ids and SK.HUTI_LINGGUANG in ids)
 g.rng = FakeRng(roll=0.5, chance=True)
-e_hp0 = g.battle().e_hp
+e_hp0 = g.battle().e.hp
 r = g.step("battle_action", cmd="skill", skill_id=SK.LINGLI_CHONGJI)
 check("free 技能实际可施放（ok + 敌HP下降）",
-      r.ok is True and r.data["skill_id"] == SK.LINGLI_CHONGJI
-      and r.data["battle"]["enemy_hp"] < e_hp0)
+      r.ok is True and g.battle() is not None and g.battle().e.hp < e_hp0)
 g.quit_battle()
 
-# ============ 8. utility 四效果 ============
-print("== 8 utility 四效果 ==")
-# root：敌方本回合跳过
+# ============ 8. 技能效果在时间轴战斗中生效（R3 重写） ============
+print("== 8 技能效果（时间轴） ==")
+# root：定身 → 敌方被控制（其前摇动作会被打断 / 行动被推后）
 b = make_battle(EM.LINGWEN_LANG, realm=1, skills=[SK.by_id(SK.QINGTENG_CHAN)])
-hp0 = b.p_hp
-t, ended, _ = b.do("skill", SK.QINGTENG_CHAN)
-check("root：敌方本回合被缚不行动", "动弹不得" in t and b.p_hp == hp0 and not ended)
-# weaken：敌方本回合伤害 ×0.5（期望按规格公式独立手算，不与被测实现互相参照）
-#   敌方伤害公式 dmg = round(enemy.attack×0.6 − 玩家defense×0.3)；
-#   FakeRng roll=0.5 → jitter=1.0（无浮动）。赤焰狐攻22，档1玩家防=7：
-#   平砍 = round(22×0.6−7×0.3) = round(11.1) = 11；weaken = round(11×0.5) = round(5.5) = 6
-def _enemy_dmg_exp(enemy, realm: int) -> int:
-    pdef = BTL.battle_stats(realm)["defense"]
-    return max(1, round(enemy.attack * 0.6 - pdef * 0.3))
+b.p.qi = 100
+cast(b, SK.QINGTENG_CHAN, windows=1)
+check("root：定身状态进入敌方袋", b.e.has_status("root"), f"{b.e.statuses}")
+check("root：状态带时间窗口（until > t）",
+      b.e.statuses.get("root", {}).get("until", 0) > b.clock.t)
 
-base_exp = _enemy_dmg_exp(EM.by_id(EM.CHIYAN_HU), 1)   # 11
-weak_exp = max(1, round(base_exp * 0.5))               # 6
-b1 = make_battle(EM.CHIYAN_HU, realm=1, skills=[SK.by_id(SK.DIXIAN_SHU)])
-b1.do("skill", SK.DIXIAN_SHU)
-dmg_weak = b1.p_hp_max - b1.p_hp
-b2 = make_battle(EM.CHIYAN_HU, realm=1)
-b2.do("attack")
-dmg_plain = b2.p_hp_max - b2.p_hp
-check("weaken：敌方本回合伤害减半", dmg_plain == base_exp and dmg_weak == weak_exp,
-      f"平砍受{dmg_plain}（期望{base_exp}）/破势受{dmg_weak}（期望{weak_exp}）")
-# evade：50% 落空（分支分开命中/落空；并钉住被询问的概率恰为 0.5）
-rng_ev = FakeRng(chance=True)
-b3 = make_battle(EM.LINGWEN_LANG, realm=1, skills=[SK.by_id(SK.YUFENG_SHU)], rng=rng_ev)
-t3, _, _ = b3.do("skill", SK.YUFENG_SHU)
-check("evade：判定落空 → 无伤", "堪堪避开" in t3 and b3.p_hp == b3.p_hp_max)
-check("evade：落空概率钉为 0.5", rng_ev.chance_last == 0.5, f"p={rng_ev.chance_last}")
-b4 = make_battle(EM.LINGWEN_LANG, realm=1, skills=[SK.by_id(SK.YUFENG_SHU)],
-                 rng=FakeRng(chance=False))
-t4, _, _ = b4.do("skill", SK.YUFENG_SHU)
-check("evade：判定命中 → 正常受创", b4.p_hp < b4.p_hp_max and "堪堪避开" not in t4)
-# breath：施放回灵 = 3×qi_regen（档1 qi_regen=6 → 吐纳 +18）
-# 账目（规格语义，非抄实现）：初始 qi2 + 回合自动回 regen6 − 技能耗 cost2 + 吐纳 18 = 24；
-# 封顶 qi_max=65 不触发。regen/cost 取自 battle 面板与技能数据，qi0=2 为测试参数。
-b5 = make_battle(EM.LINGWEN_LANG, realm=1, skills=[SK.by_id(SK.TUNA_SHU)], qi=2)
-t5, _, _ = b5.do("skill", SK.TUNA_SHU)
-reg = b5.p_qi_regen
-cost = SK.by_id(SK.TUNA_SHU).qi_cost
-expect = 2 + reg - cost + 3 * reg  # = 2+6−2+18 = 24
-check("breath：吐纳回灵=3×regen 量级", b5.p_qi == expect and f"灵气 +{3 * reg}" in t5,
-      f"qi→{b5.p_qi}（期望{expect}）")
-# 无 effect_key 的 utility 拒放（含 kind=utility 校验）
-from content.ids import CAT_SKILL, make_id as _mkid
-import dataclasses
-void = dataclasses.replace(SK.by_id(SK.YUFENG_SHU), id=_mkid(CAT_SKILL, 99),
-                           name="测试·无效果技", effect_key="")
-b6 = make_battle(EM.LINGWEN_LANG, realm=1, skills=[void], qi=100)
-t6, ended6, _ = b6.do("skill", void.id)
-check("utility 无效果 → 拒放（skill_na）不推进回合",
-      b6.last_reason == "skill_na" and not ended6 and b6.turn == 0)
-# 灵气不足 → 结构化原因码
-b7 = make_battle(EM.LINGWEN_LANG, realm=1, qi=1)
-b7.do("skill", SK.LINGLI_CHONGJI)
-check("灵气不足 → 拒放（low_qi）不推进回合",
-      b7.last_reason == "low_qi" and b7.turn == 0)
+# guard：防御技 → 自身护体状态
+b = make_battle(EM.LINGWEN_LANG, realm=1, skills=[SK.by_id(SK.HUTI_LINGGUANG)])
+b.p.qi = 100
+cast(b, SK.HUTI_LINGGUANG, windows=1)
+check("guard：护体状态进入自身袋", b.p.has_status("guard"), f"{b.p.statuses}")
+check("guard：参数含减伤倍率",
+      b.p.statuses.get("guard", {}).get("params", {}).get("mult") == 0.5)
+
+# weaken（破势）：进敌方袋 + rules 攻方乘区认识
+b = make_battle(EM.LINGWEN_LANG, realm=1, skills=[SK.by_id(SK.DIXIAN_SHU)])
+b.p.qi = 100
+cast(b, SK.DIXIAN_SHU, windows=1)
+check("weaken：破势状态进入敌方袋", b.e.has_status("weaken"))
+check("weaken：rules 攻方乘区认识该键",
+      R.STATUS_MULT.get("weaken", (None, 0))[0] == "attacker")
+
+# evade：闪避 → 自身袋
+b = make_battle(EM.LINGWEN_LANG, realm=1, skills=[SK.by_id(SK.YUFENG_SHU)])
+b.p.qi = 100
+cast(b, SK.YUFENG_SHU, windows=1)
+check("evade：闪避状态进入自身袋", b.p.has_status("evade"))
+
+# breath：吐纳 → 立即回灵（QiGain 组件，不入状态袋）
+b = make_battle(EM.LINGWEN_LANG, realm=1, skills=[SK.by_id(SK.TUNA_SHU)], qi=10)
+cast(b, SK.TUNA_SHU, windows=1)
+check("breath：吐纳立刻回灵（qi 上升）", b.p.qi > 10, f"qi={b.p.qi}")
+check("breath：吐纳不入状态袋", not b.p.has_status("breath"))
+
+# 灵气不足 → 队列拒绝（low_qi）
+b = make_battle(EM.LINGWEN_LANG, realm=1, qi=1)
+ok_ll, reason_ll = b.submit(SK.by_id(SK.LINGLI_CHONGJI).key)
+check("灵气不足 → 拒入队（low_qi）", not ok_ll and reason_ll == "low_qi")
 
 # ============ 9. 拥有校验（learn/buy） ============
 print("== 9 拥有校验 ==")
@@ -631,16 +644,17 @@ check("status 文本渲染含运转池/领悟池标题", "运转池" in txt and 
 learn(g, "撼岳诀", "battle1")
 g.rng = FakeRng(roll=0.5, chance=True)
 g.start_battle(EM.LINGWEN_LANG)
+e_hp0 = g.battle().e.hp
 r = g.step("battle_action", cmd="skill", skill_id=SK.ZHUIYUE_ZHANG)
-check("战斗列表/施放正常（含 battle 槽技）", r.ok is True
-      and r.data["skill_id"] == SK.ZHUIYUE_ZHANG)
+check("战斗列表/施放正常（含 battle 槽技）",
+      r.ok is True and g.battle() is not None and g.battle().e.hp < e_hp0)
 g.quit_battle()
 
-# ============ 18. 逆向回归：test_battle.py ============
-print("== 18 逆向回归 test_battle.py ==")
+# ============ 18. 逆向回归：时间轴战斗单测 ============
+print("== 18 逆向回归 test_battle_time.py ==")
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 run = subprocess.run([sys.executable, "-X", "utf8",
-                      os.path.join(root, "tests", "test_battle.py")],
+                      os.path.join(root, "tests", "test_battle_time.py")],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 check("test_battle.py 子进程 0 退出（原 49+ 全过）", run.returncode == 0,
       f"退出码 {run.returncode}")

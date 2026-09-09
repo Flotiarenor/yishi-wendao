@@ -78,45 +78,60 @@ def _pick_site(p) -> int:
     return candidates[0][1]
 
 
-# ---------- P2 战斗 bot ----------
+# ---------- 战斗 bot（R3 时间轴版） ----------
 def _battle_decision(g):
-    """粗估双方伤害：能赢就打（取克制/最高伤攻击技），不能赢/HP 低 → 遁走。"""
+    """粗估双方输出 → 决定这一轮排什么动作。
+
+    R3 起战斗是"决策窗口 + 队列"：bot 每轮排一个动作（够用且可复现），
+    窗口由敌方速度决定，引擎自己把这一轮跑完。
+    返回动作键（"attack" / 技能 key / "flee" / "gather"）。
+    """
     b = g.battle()
-    enemy = b.enemy
-    # 我方每轮伤害粗估：平砍兜底，逐个可用攻击技能取最大（考虑五行克制系数）
-    plain = max(1, round(b.p_attack - enemy.defense * 0.4))
-    best_dmg, best = float(plain), ("attack", None)
-    for sk in b.available_skills():
-        if sk.kind != "attack" or b.p_qi < sk.qi_cost:
+    e = b.e
+    # 我方每次出手的伤害粗估（平砍兜底，逐个攻击技取最大，含五行克制）
+    plain = max(1.0, e.defense and (b.p.attack - e.defense * 0.4) or b.p.attack)
+    best_dmg, best_key = float(plain), "attack"
+    for a in b.actions.values():
+        dmg_c = next((c for c in a.components if hasattr(c, "attack_ratio")), None)
+        if dmg_c is None or a.kind != "attack":
             continue
-        dmg = (sk.power + b.p_attack * 0.5 - enemy.defense * 0.3) \
-            * BTL.ke_mult(sk.element, enemy.element)
+        if b.p.qi < a.qi_cost:
+            continue
+        dmg = (dmg_c.power + b.p.attack * dmg_c.attack_ratio - e.defense * 0.3) \
+            * BTL.ke_mult(dmg_c.element, e.element)
         if dmg > best_dmg:
-            best_dmg, best = dmg, ("skill", sk.id)
-    # 敌方每轮伤害粗估（不防御）
-    e_dmg = max(1.0, round(enemy.attack * 0.6 - b.p_defense * 0.3))
-    my_rounds = math.ceil(b.e_hp / max(1.0, best_dmg))      # 我还要几回合击杀
-    e_rounds = math.ceil(b.p_hp / e_dmg)                    # 敌还要几回合击杀我
-    # 我方先手：需留 1 回合余量（±10% 浮动与防御消耗），HP<30% 一律遁走
-    if b.p_hp <= b.p_hp_max * 0.3 or my_rounds > e_rounds - 1:
-        return ("flee", None)
-    return best
+            best_dmg, best_key = dmg, a.key
+    # 敌方每次出手伤害粗估
+    e_dmg = max(1.0, e.attack * 1.0 - b.p.defense * 0.0)   # 灵兽扑击 attack_ratio=1.0
+    my_rounds = math.ceil(e.hp / max(1.0, best_dmg))
+    e_rounds = math.ceil(b.p.hp / e_dmg)
+    if b.p.hp <= b.p.hp_max * 0.3 or my_rounds > e_rounds - 1:
+        return "flee"
+    # 灵气不够就平砍（不耗灵）——**不要聚气**：聚气一轮等于白挨一击
+    return best_key
 
 
 def _fight(g, battle_stats: dict, verbose: bool = False, tag: int = 0) -> str:
-    """把当前战斗打完（bot 逐回合决策）。返回结局 win/lose/fled。"""
+    """把当前战斗打完（bot 逐轮排动作）。返回结局 win/lose/fled。"""
     b = g.battle()
     battle_stats["battles"] = battle_stats.get("battles", 0) + 1
     if verbose:
-        print(f"  T{tag} 遇敌【{b.enemy.name}】HP{b.e_hp} vs 我HP{b.p_hp}")
+        print(f"  T{tag} 遇敌【{b.e.name}】HP{b.e.hp} vs 我HP{b.p.hp}")
     outcome = ""
     guard = 0
+    # 开局决定一次：打不过就逃（逃不掉/或中途濒死再考虑），避免在"逃不掉"里空转
+    flee_first = _battle_decision(g) == "flee"
     while g.battle_active() and guard < 200:
-        act, skid = _battle_decision(g)
-        r = g.step("battle_action", cmd=act, skill_id=skid)
+        if guard == 0 and flee_first:
+            key = "flee"
+        else:
+            key = _battle_decision(g)
+            if key == "flee":
+                key = "attack"          # 开局已判定该逃；之后一律打完
+        r = g.step("battle_action", cmd=key)
         if verbose:
-            tail = r.text.splitlines()[-1]
-            print(f"  T{tag}B{guard} {act} {skid or ''} -> {tail}")
+            tail = r.text.splitlines()[-1] if r.text else ""
+            print(f"  T{tag}B{guard} {key} -> {tail}")
         guard += 1
         if r.battle_over:
             outcome = r.battle_over
@@ -213,7 +228,7 @@ def _gongfa_tick(g, turns: int) -> bool:
     return False
 
 
-def play(seed: int, max_turns: int = 4000, verbose: bool = False,
+def play(seed: int, max_turns: int = 20000, verbose: bool = False,
          battle_stats: dict = None):
     g = Game(seed=seed)
     p = g.state.player

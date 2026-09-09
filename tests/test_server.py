@@ -436,14 +436,14 @@ finally:
 print("== K 引擎回归子进程 ==")
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 run1 = subprocess.run([sys.executable, "-X", "utf8",
-                       os.path.join(root, "tests", "test_battle.py")],
+                       os.path.join(root, "tests", "test_battle_time.py")],
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-check("test_battle.py 子进程 0 退出（52 项全过）", run1.returncode == 0,
+check("test_battle_time.py 子进程 0 退出（时间轴战斗全过）", run1.returncode == 0,
       f"退出码 {run1.returncode}")
 run2 = subprocess.run([sys.executable, "-X", "utf8",
                        os.path.join(root, "tests", "test_gongfa_deep.py")],
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-check("test_gongfa_deep.py 子进程 0 退出（89 项全过）", run2.returncode == 0,
+check("test_gongfa_deep.py 子进程 0 退出", run2.returncode == 0,
       f"退出码 {run2.returncode}")
 
 # 清理临时目录

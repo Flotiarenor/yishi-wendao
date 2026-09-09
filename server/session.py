@@ -1,15 +1,16 @@
-"""会话层：GameSession + RunManager（P3.6 最小 Web 闭环的核心）。
+"""会话层：GameSession + RunManager（Web 壳的核心）。
 
-规则与 `cli/main.py` 的 risky() 完全一致（本层是 CLI 手动写法的独立复用实现）：
+规则：
   - RISKY_ACTIONS（消耗时间/资源的动作）：执行前 g.save_checkpoint() → 落盘 .cp.json
     → 执行动作 → 落盘 run_<seed>.json；
-  - 其它动作：执行 → 落盘 run_<seed>.json（每步都落盘，等价 CLI 的 sv.write）。
+  - 其它动作：执行 → 落盘 run_<seed>.json（每步都落盘）。
   - undo：g.load_checkpoint() 回退到上一节点；失败返回 (False, None)。
 
 并发：每个 run 一把 threading.Lock，所有引擎调用都必须在锁内（引擎非线程安全）。
 
-存档 I/O 复用 `cli/savefile.py`（write/read/list_saves/save_path），不改其文件格式；
+存档 I/O 用 `server/savefile.py`（write/read/list_saves/save_path），不改其文件格式；
 save_dir 参数用于注入自定义存档目录（测试用临时目录、服务配置），None = 项目 saves/。
+（CLI 已于 R3.4 下线，存档 I/O 由 cli/ 迁至 server/。）
 
 服务层错误码（**不属于引擎 R_* 枚举**，只在 server 层使用）：
   unknown_run    run_id 不存在
@@ -20,11 +21,11 @@ import os
 import random
 import threading
 
-from cli import savefile as sv
+from server import savefile as sv
 from engine import settings as S
 from engine.game import Game, Result
 
-# 与 cli/main.py 的 risky() 规则保持一致（消耗时间/资源的动作先存节点）
+# 消耗时间/资源的动作先存节点
 RISKY_ACTIONS = frozenset({
     "cultivate", "breakthrough", "age_pass", "travel",
     "explore", "buy", "use_pill", "comprehend",

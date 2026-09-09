@@ -24,6 +24,7 @@ class Player:
     death_cause: str = ""
     # --- 经济与探索 ---
     spirit_stones: int = 0               # 灵石
+    qi: float = 0.0                      # 当前灵气（战斗间保留；上限随境界，R3）
     inventory: dict = field(default_factory=dict)  # {丹药名: 数量}
     location: str = ""                   # 所在地点（坊市/灵脉山/...）
     # --- 功法栏（运转池雏形，P1 只开放主修位）---

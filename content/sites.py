@@ -59,7 +59,7 @@ _reg(Site(
 _reg(Site(
     SHANGGU, "上古洞府",
     "疑似化神大能坐化之所，机缘与死劫一线之隔。",
-    realm_req=18, days_cost=90, stone=(200, 600), danger=0.35,
+    realm_req=18, days_cost=90, stone=(700, 1600), danger=0.35,
     pill_drops={P.JULING: 0.10, P.NINGYING: 0.04},
 ))
 

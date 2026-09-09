@@ -90,6 +90,9 @@ def require_hp_below(ratio: float) -> Callable:
 class Action:
     """一个可执行的战斗动作（数据）。
 
+    id        : 内容层整数 id（30 段技能 id；基础/敌人动作可为 None）。
+                仅用于"功法 skill_ids ↔ 动作"的引用，引擎结算不使用。
+    key       : 稳定字符串键（动作池引用键，禁中文名）
     kind      : attack / defense / utility / special（仅展示与筛选用，不参与结算）
     qi_cost   : 消耗灵气
     target    : self / enemy / all_enemies（字段先留，暂只实现单目标）
@@ -113,6 +116,7 @@ class Action:
     duration_weight: float = 0.0
     tier: int = 1
     desc: str = ""
+    id: Optional[int] = None
 
     def display(self) -> str:
         return self.name or self.key

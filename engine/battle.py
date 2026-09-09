@@ -280,6 +280,20 @@ class Battle:
             a = self.actions.get(action_key)
             if a is None:
                 continue
+            # 遁走是特殊动作（无组件；判定成功即结束战斗）
+            if a.key == "flee":
+                ok_flee, _ = self.flee()
+                rep.events.append({"t": self.clock.t, "type": "action",
+                                   "actor": "player", "action": "flee",
+                                   "damage": 0, "lines": []})
+                if ok_flee:
+                    rep.lines.append("你全力遁走，成功脱离战斗！")
+                    self._check_end(rep)
+                    rep.ended, rep.outcome = self._ended, self._outcome
+                    return rep
+                rep.lines.append("遁走失败，只得继续纠缠……")
+                self._check_end(rep)
+                continue
             self._seq += 1
             ok, reason, pa = begin(self.p, self.e, a, self.clock, seq=self._seq)
             if not ok:
@@ -441,7 +455,7 @@ class Battle:
         return self.rng.roll(salt)
 
     # ============================================================
-    # 兼容：旧 API 形状（R3.3 由 game 层调用）
+    # 遁走 / 放弃
     # ============================================================
     def flee(self) -> tuple:
         """遁走判定（成功=结束战斗）。"""

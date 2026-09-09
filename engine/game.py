@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import engine.settings as S
+from content import actions as CA
 from content import enemies as EM
 from content import gongfa as G
 from content import pills as P
@@ -306,7 +307,7 @@ def combat_skills(p: Player) -> list:
          strict → 仅当 该 gid 是主修 或 熟悉度 ≥ FAM_MAX（大成）才入池。
     返回按 id 升序去重的技能对象列表。
     """
-    out: dict[int, SK.Skill] = {}
+    out: dict[int, SK.SkillSpec] = {}
     # 1) free 独立术法
     for sk in SK.SKILLS.values():
         if sk.requirement == "free":
@@ -336,6 +337,18 @@ def combat_skills(p: Player) -> list:
     return [out[i] for i in sorted(out)]
 
 
+def combat_actions(p: Player) -> list:
+    """战斗动作池（R3 起战斗层只认 Action）= 基础动作 + 可用技能 + 灵石加速。"""
+    from content import actions as CA
+    acts = list(CA.BASIC_ACTIONS)          # 平砍/防御/聚气/遁走
+    acts += [s.action for s in combat_skills(p)]
+    acts += [CA.BUY_QI_LOW, CA.BUY_QI_HIGH]
+    seen = {}
+    for a in acts:
+        seen[a.key] = a
+    return list(seen.values())
+
+
 def _skill_tag(sk) -> str:
     """技能展示串（utility 显示效果名，供战斗开始/菜单用）。"""
     base = f"{sk.element}·{sk.kind}"
@@ -347,14 +360,16 @@ def _skill_tag(sk) -> str:
 
 def _skill_data(sk) -> dict:
     """技能 → 结构化负载（战斗面板/技能列表用）。"""
+    t = sk.action.timing
     return {
-        "id": sk.id, "name": sk.name, "element": sk.element, "kind": sk.kind,
+        "id": sk.id, "key": sk.key, "name": sk.name,
+        "element": sk.element, "kind": sk.kind,
         "qi_cost": sk.qi_cost, "power": sk.power,
         "requirement": sk.requirement,
         "unlock_fam": sk.unlock_fam,
-        "effect_key": sk.effect_key,          # P3.8 正名字段（效果模板键）
-        "utility_effect": sk.effect_key,      # 镜像别名（旧前端/兼容；值恒等）
-        "modifiers": dict(sk.modifiers),      # P3.8 修饰器键→参数
+        "effect_key": sk.effect_key,
+        "windup": t.windup, "recovery": t.recovery,
+        "tier": sk.action.tier,
         "label": _skill_tag(sk),
     }
 
@@ -415,6 +430,8 @@ class Game:
             p = self.state.player
             p.spirit_stones = S.START_SPIRIT_STONES
             p.location = ST.SHISHI
+            # 开局灵气 = 当前境界灵气池上限（否则所有技能都因 low_qi 放不出来）
+            p.qi = float(BTL.battle_stats(p.realm_idx)["qi_max"])
             self.state.chronicle.add(
                 p.age_years,
                 f"生于凡尘，得入仙途，身具【{p.spirit_root}】。",
@@ -505,6 +522,16 @@ class Game:
         self.state.player.age_years = round(
             self.state.age_days_to_years(self.state.day) + 16.0, 2
         )
+        self._regen_qi(days)
+
+    def _regen_qi(self, days: int):
+        """战斗外灵气随时间恢复（与战斗内速率一致：1/息 = 每天 120 灵气）。
+
+        灵气池上限随境界变化，故每次回满到"当前境界上限"。
+        """
+        p = self.state.player
+        cap = float(BTL.battle_stats(p.realm_idx)["qi_max"])
+        p.qi = min(cap, max(0.0, p.qi) + days * S.QI_REGEN_PER_DAY)
 
     def _check_death(self) -> bool:
         p = self.state.player
@@ -530,12 +557,13 @@ class Game:
             r.game_over = True
             return _reject(r, R_GAME_OVER, "你已身死道消，本世已终。")
         # 战斗中：只允许战斗指令（status 可查看含战况）
-        if self._active_battle is not None and action not in ("battle_action", "status"):
+        if self._active_battle is not None and action not in (
+                "battle_action", "battle_submit", "battle_skip", "status"):
             b = self._active_battle
             return _reject(
                 r, R_IN_BATTLE,
                 f"你正与【{b.enemy.name}】激战，只能输入战斗指令"
-                f"（battle_action：attack/skill/defend/flee/gather）。",
+                f"（battle_submit 入队 / battle_skip 执行）。",
             )
         if action == "status":
             r.ok = True
@@ -579,6 +607,10 @@ class Game:
                 r.text = self._gongfa_detail_text(str(kw.get("gongfa", "")))
         elif action == "market":
             r = self._market()
+        elif action == "battle_submit":
+            r = self._battle_submit(str(kw.get("key", "") or kw.get("cmd", "")))
+        elif action == "battle_skip":
+            r = self._battle_skip()
         elif action == "battle_action":
             return self._battle_action(str(kw.get("cmd", "")), kw.get("skill_id"))
         else:
@@ -1315,31 +1347,24 @@ class Game:
         return True
 
     def _battle_panel(self) -> dict:
-        """玩家本场战斗面板：境界档派生（含满额 HP/灵气，本场消耗不入存档）。"""
-        return BTL.battle_stats(self.state.player.realm_idx)
+        """玩家本场战斗面板：境界档派生 + 玩家当前灵气/灵石（R3）。"""
+        p = self.state.player
+        ps = BTL.battle_stats(p.realm_idx)
+        ps["qi"] = min(p.qi, ps["qi_max"])
+        ps["stones"] = p.spirit_stones
+        return ps
 
     def _battle_data(self):
         """当前战斗会话 → 结构化快照（None=不在战斗；前端战斗面板直接消费）。"""
         b = self._active_battle
         if b is None:
             return None
-        return {
-            "enemy_id": b.enemy.id, "enemy_name": b.enemy.name,
-            "enemy_element": b.enemy.element, "enemy_realm_idx": b.enemy.realm_idx,
-            "enemy_hp": b.e_hp, "enemy_hp_max": b.enemy.hp,
-            "p_hp": b.p_hp, "p_hp_max": b.p_hp_max,
-            "p_qi": b.p_qi, "p_qi_max": b.p_qi_max,
-            "turn": b.turn, "ended": b.ended, "outcome": b.outcome,
-            "skills": [_skill_data(s) for s in b.available_skills()],
-            # P3.8：双方效果列表（前端可渲染状态图标；空袋时为 []）
-            **{f"{side}_effects": lst for side, lst in b.effects_data().items()},
-        }
+        return b.state()
 
     def start_battle(self, enemy_id: int) -> Result:
         """构造一场战斗并存入 self._active_battle（运行时状态，不入存档）。
 
-        返回欢迎文本（含可用技能列表）；敌人由 id（content.enemies 常量）指定。
-        技能池 = combat_skills()（free 术法 + 运转池功法已解锁技能，按谱系过滤）。
+        动作池 = combat_actions()（基础动作 + 可用技能 + 灵石加速）。
         """
         r = Result()
         if self._active_battle is not None:
@@ -1347,56 +1372,96 @@ class Game:
         e = EM.ENEMIES.get(enemy_id)
         if e is None:
             return _reject(r, R_UNKNOWN_ENEMY, "无此敌人。")
+        self._battle_seq = getattr(self, "_battle_seq", 0) + 1
         self._active_battle = BTL.Battle(
             player_stats=self._battle_panel(),
-            player_skills=combat_skills(self.state.player),
+            player_actions=combat_actions(self.state.player),
             enemy=e,
             rng=self.rng,
+            battle_id=self._battle_seq,
+            enemy_actions=list(CA.ENEMY_ACTIONS),
         )
         b = self._active_battle
-        skills_txt = " ／ ".join(_skill_tag(s) for s in b.available_skills()) or "（暂无，只能平砍）"
+        acts_txt = " ／ ".join(a["label"] if "label" in a else a["name"]
+                              for a in b.available()[:12])
         r.battle_started = True
         return _accept(
             r,
             f"⚠ 遭遇【{e.name}】（{e.element}系·档{e.realm_idx}）！\n"
             f"{b.view()}\n"
-            f"动作：1 平砍 ｜ 2 技能 ｜ 3 防御 ｜ 4 遁走 ｜ 5 聚气\n"
-            f"可用技能：{skills_txt}",
+            f"决策窗口 {b.window_li() / 100:.1f} 息（敌方下次出手前可安排动作）\n"
+            f"可用动作：{acts_txt}",
             {"enemy_id": e.id, "enemy_name": e.name, "enemy_element": e.element,
              "enemy_realm_idx": e.realm_idx, "battle": self._battle_data()},
         )
 
-    def _battle_action(self, cmd: str, skill_id=None) -> Result:
-        """驱动一回合战斗；结束则结算并清空 _active_battle。"""
+    # ---------- R3 战斗：入队 / 执行 ----------
+    def _battle_submit(self, action_key: str) -> Result:
+        """把一个动作排入本轮队列（不推进时间）。"""
         r = Result()
         if self._active_battle is None:
             return _reject(r, R_NOT_IN_BATTLE, "当前不在战斗中。")
         b = self._active_battle
-        # 技能输入允许 int id 或中文名 → 统一为 int id
-        if isinstance(skill_id, str) and skill_id.strip():
-            skill_id = SK.resolve(skill_id.strip())
-        text, ended, outcome = b.do(cmd, skill_id)
-        r.text = text
-        data = {"cmd": cmd, "skill_id": skill_id, "outcome": outcome,
-                "used": sorted(b.used), "battle": self._battle_data()}
-        if b.last_reason:
+        ok, reason = b.submit(action_key)
+        if not ok:
+            return _reject(r, reason, f"无法排入【{action_key}】（{reason}）。")
+        return _accept(r, f"已排入【{action_key}】。",
+                       {"queue": b.state()["queue"], "battle": self._battle_data()})
+
+    def _battle_skip(self) -> Result:
+        """执行本轮队列并推进时间轴到玩家下次可动。"""
+        r = Result()
+        if self._active_battle is None:
+            return _reject(r, R_NOT_IN_BATTLE, "当前不在战斗中。")
+        return self._battle_advance(r)
+
+    def _battle_advance(self, r: Result) -> Result:
+        """执行窗口 + 结束结算（submit/skip 与兼容别名共用）。"""
+        b = self._active_battle
+        rep = b.run_window()
+        r.text = "\n".join(rep.lines)
+        data = {"events": rep.events, "used": sorted(rep.used),
+                "interrupted": rep.interrupted,
+                "outcome": b.outcome(), "battle": self._battle_data()}
+        if b.last_reason and not rep.lines:
             r.ok = False
             r.reason = b.last_reason
         else:
             r.ok = True
             r.reason = R_OK
-        if ended:
-            r.battle_over = outcome or ""
-            self._finish_battle(b, outcome or "", r)
+        # 战斗结束 → 结算
+        if b.ended():
+            r.battle_over = b.outcome()
+            self._finish_battle(b, b.outcome(), r)
             data["battle"] = None
             data["enemy_id"] = b.enemy.id
             data["enemy_name"] = b.enemy.name
         r.data = data
         return r
 
+    def _battle_action(self, cmd: str, skill_id=None) -> Result:
+        """兼容入口：`cmd` 为动作键或中文技能名 → 入队并立即执行一轮。"""
+        r = Result()
+        if self._active_battle is None:
+            return _reject(r, R_NOT_IN_BATTLE, "当前不在战斗中。")
+        b = self._active_battle
+        key = None
+        if skill_id is not None:
+            sid = SK.resolve(skill_id) if not isinstance(skill_id, int) else skill_id
+            if sid is not None and sid in SK.SKILLS:
+                key = SK.SKILLS[sid].key
+        if key is None:
+            key = _resolve_action_key(cmd, b)
+        if key is None:
+            return _reject(r, R_UNKNOWN_ACTION, f"未知战斗动作：{cmd}")
+        ok, reason = b.submit(key)
+        if not ok:
+            return _reject(r, reason, f"无法施展【{cmd}】（{reason}）。")
+        return self._battle_advance(r)
+
     def _finish_battle(self, b, outcome: str, r: Result):
         """战斗结束的资源结算（胜=掉落 ｜ 败=重伤不致死 ｜ 逃=无得），
-        随后按 b.used 给"在运转池的母功法"结算熟悉度成长，最后清空战斗。"""
+        随后按用过的动作给"在运转池的母功法"结算熟悉度成长，最后清空战斗。"""
         p = self.state.player
         e = b.enemy
         tail = []
@@ -1429,14 +1494,20 @@ class Game:
         else:  # 遁走
             self.state.chronicle.add(p.age_years, f"自【{e.name}】爪下遁走，全身而退。")
             tail.append("【遁走】你全身而退，未获分毫。")
-        # P3：战斗使用成长——每个成功施放的技能，其"在运转池的母功法"熟悉度 +PER_USE
+        # 战斗使用成长：用过的动作 → 其"在运转池的母功法"熟悉度 +PER_USE
         pool = _pool_gongfas(p)
-        for skid in sorted(b.used):
-            for gid in G.mother_gongfas(skid):
+        for akey in sorted(b.used):
+            sk = SK.BY_KEY.get(akey)
+            if sk is None:
+                continue
+            for gid in G.mother_gongfas(sk.id):
                 if gid in pool:
                     p.familiarity[gid] = min(
                         S.FAM_MAX, int(p.familiarity.get(gid, 0) + S.FAMILIARITY_PER_USE)
                     )
+        # 灵气/灵石回写世界层（战斗间保留）
+        p.qi = max(0.0, min(b.p.qi, BTL.battle_stats(p.realm_idx)["qi_max"]))
+        p.spirit_stones = max(0, int(b.p.stones))
         self._active_battle = None
         if r.text:
             r.text += "\n" + "\n".join(tail)
@@ -1567,3 +1638,23 @@ class Game:
         if not self.state.chronicle.entries:
             lines.append("（尚无大事）")
         return lines
+
+
+def _resolve_action_key(cmd: str, battle):
+    """把玩家/bot 的指令（动作键/中文名/别名）解析成动作键。"""
+    s = (cmd or "").strip()
+    if not s:
+        return None
+    low = s.lower()
+    alias = {"attack": "attack", "平砍": "attack", "攻": "attack",
+             "defend": "defend", "防御": "defend", "防": "defend",
+             "gather": "gather", "聚气": "gather", "聚": "gather",
+             "flee": "flee", "遁走": "flee", "逃": "flee"}
+    if low in alias:
+        return alias[low]
+    if s in battle.actions:
+        return s
+    sid = SK.resolve(s)
+    if sid is not None and sid in SK.SKILLS:
+        return SK.SKILLS[sid].key
+    return None
