@@ -61,6 +61,7 @@ def _run_tests(argv):
     """依次跑全部测试（子进程隔离；任一失败即非零退出）。"""
     py = sys.executable
     targets = [
+        ("统一时间刻度单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_time.py")]),
         ("效果系统单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_effects.py")]),
         ("引擎加固单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_hardening.py")]),
         ("时间轴/规则单测", [py, "-X", "utf8", os.path.join(ROOT, "tests", "test_clock.py")]),

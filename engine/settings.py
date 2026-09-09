@@ -68,12 +68,92 @@ ELEMENTS = ["金", "木", "水", "火", "土"]
 SPIRIT_ROOT_NAMES = ["废灵根", "杂灵根", "双灵根", "单灵根(地)", "天灵根"]
 SPIRIT_ROOT_MULT = [0.4, 0.7, 1.0, 1.3, 1.8]
 
-# ---------- 时间 ----------
+# ---------- 时间（P4：统一到"息"，唯一刻度）----------
+# 1 息 = 2 秒（战斗系统定案口径）。世界 / 战斗 / 移动共用这条整数轴。
 DAYS_PER_YEAR = 360
+DAYS_PER_MONTH = 30
+SHICHEN_PER_DAY = 12       # 十二时辰
+KE_PER_SHICHEN = 8         # 1 时辰 = 8 刻
+SI_PER_KE = 450            # 1 刻 = 15 分
+SI_PER_SHICHEN = 3600      # 1 时辰 = 2 小时 = 8 刻
+SI_PER_DAY = 43200         # 1 日 = 12 时辰 = 96 刻
+SI_PER_YEAR = SI_PER_DAY * DAYS_PER_YEAR
+
+SHICHEN_NAMES = ("子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥")
+
+# 昼夜五行段（设计定案 §六 威力层）：(段名, 时辰索引, 主五行)
+# 子=0 丑=1 寅=2 卯=3 辰=4 巳=5 午=6 未=7 申=8 酉=9 戌=10 亥=11
+DAY_PHASES = (
+    ("夜半", (11, 0, 1), "水"),    # 亥子丑
+    ("平旦", (2, 3, 4), "木"),     # 寅卯辰
+    ("日中", (5, 6, 7), "火"),     # 巳午未（午时最盛）
+    ("日入", (8, 9, 10), "金"),    # 申酉戌
+)
+# 土旺四季：辰/未/戌/丑 额外叠土
+EARTH_SHICHEN = (1, 4, 7, 10)
+
+_CN_DIGITS = "零一二三四五六七八九"
+
+
+def _cn_num(n: int) -> str:
+    """1..9999 的中文数字（用于古风时间显示）。"""
+    n = int(n)
+    if n <= 0:
+        return _CN_DIGITS[0]
+    if n < 10:
+        return _CN_DIGITS[n]
+    if n < 20:
+        return "十" + (_CN_DIGITS[n % 10] if n % 10 else "")
+    if n < 100:
+        return _CN_DIGITS[n // 10] + "十" + (_CN_DIGITS[n % 10] if n % 10 else "")
+    if n < 1000:
+        s = _CN_DIGITS[n // 100] + "百"
+        rem = n % 100
+        if rem == 0:
+            return s
+        if rem < 10:
+            return s + "零" + _CN_DIGITS[rem]
+        return s + _cn_num(rem)
+    s = _CN_DIGITS[n // 1000] + "千"
+    rem = n % 1000
+    if rem == 0:
+        return s
+    if rem < 100:
+        return s + "零" + _cn_num(rem)
+    return s + _cn_num(rem)
+
+
+def day_of(t: int) -> int:
+    """自开局起的第几日（0 起）。"""
+    return int(t) // SI_PER_DAY
+
+
+def shichen_index(t: int) -> int:
+    """0=子 … 11=亥。"""
+    return (int(t) % SI_PER_DAY) // SI_PER_SHICHEN
+
+
+def shichen_of(t: int) -> str:
+    return SHICHEN_NAMES[shichen_index(t)]
+
+
+def day_phase(t: int) -> tuple:
+    """返回 (段名, 主五行, 叠加五行或 "")。土旺四季在辰/未/戌/丑 叠加。"""
+    idx = shichen_index(t)
+    for name, hours, elem in DAY_PHASES:
+        if idx in hours:
+            return name, elem, ("土" if idx in EARTH_SHICHEN else "")
+    return "平旦", "木", ""
+
+
+def format_time(t: int) -> str:
+    """古风时间串，如「第三日 · 午时」。"""
+    return f"第{_cn_num(day_of(t) + 1)}日 · {shichen_of(t)}时"
+
 
 # ---------- 灵石与经济 ----------
 START_SPIRIT_STONES = 50          # 开局灵石
-TRAVEL_DAYS = 3                   # 坊市/地点间移动耗时（天）
+TRAVEL_DAYS = 3                   # ⚠️ 废弃中：P4-T3 改为按距离 × 地形算息（保留仅为旧档/旧测试兼容）
 
 # 小境界突破耗灵石 = 基准 + 档号系数（随境界上涨，防止无脑冲）
 BREAKTHROUGH_STONE_COST = 10
@@ -92,5 +172,7 @@ BATTLE_SLOTS = 4           # 运转池·战斗槽
 SHENFA_SLOTS = 1           # 运转池·身法槽（设计 1~2，P3 取 1）
 
 # ---------- R3 时间轴战斗：灵气（定案 §5 / §11.1） ----------
-# 战斗内回灵 1/息（1 息 = 2 秒）；战斗外按天折算恢复。
-QI_REGEN_PER_DAY = 60.0    # 战斗外每日灵气恢复量（= 60 息 × 1/息）
+# 战斗内回灵 1/息（1 息 = 2 秒）。战斗外恢复显著更慢（P4-T1.5 重标）：
+# 每日恢复量固定为 60，换算成"每息"即 60 / 43200 —— 与旧口径等价，但支持亚日推进。
+QI_REGEN_PER_DAY = 60.0                            # 战斗外每日灵气恢复量（占位）
+QI_REGEN_PER_SI = QI_REGEN_PER_DAY / SI_PER_DAY    # ≈ 0.0013889 / 息

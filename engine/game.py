@@ -56,6 +56,7 @@ from content import pills as P
 from content import sites as ST
 from content import skills as SK
 from engine import battle as BTL
+from engine.clock import LI as LI_PER_SI   # 1 息 = 100 厘息（P4：战斗耗时接回世界轴）
 from engine.rng import Rng
 from engine.state import GameState, Player, Chronicle
 
@@ -518,20 +519,37 @@ class Game:
 
     # ---------- 工具 ----------
     def _advance_days(self, days: int):
-        self.state.day += days
-        self.state.player.age_years = round(
+        """推进整数天（世界层动作仍以"天"为输入，内部统一折算为息）。"""
+        self._advance_si(int(days) * S.SI_PER_DAY)
+
+    def _advance_si(self, si: int, regen: bool = True):
+        """推进时间（息，P4 统一刻度）。年龄仍按**整日**计算（寿元按天/年结算）。
+
+        regen=False：战斗结束后接回世界轴时用——那时灵气已按战斗结果同步，不再重复回灵。
+        """
+        si = max(0, int(si))
+        self.state.t += si
+        p = self.state.player
+        p.age_years = round(
             self.state.age_days_to_years(self.state.day) + 16.0, 2
         )
-        self._regen_qi(days)
+        if regen:
+            self._regen_qi_si(si)
 
     def _regen_qi(self, days: int):
-        """战斗外灵气随时间恢复（与战斗内速率一致：1/息 = 每天 120 灵气）。
+        self._regen_qi_si(int(days) * S.SI_PER_DAY)
 
-        灵气池上限随境界变化，故每次回满到"当前境界上限"。
+    def _regen_qi_si(self, si: int):
+        """战斗外灵气随时间恢复（按息结算）。
+
+        整日部分仍走 `days × QI_REGEN_PER_DAY`（与 P4 前逐位等价，避免浮点漂移）；
+        不足一日的余量按 `SI_PER_SI` 折算——这是"战斗耗时计入世界时间"后的新增能力。
         """
         p = self.state.player
         cap = float(BTL.battle_stats(p.realm_idx)["qi_max"])
-        p.qi = min(cap, max(0.0, p.qi) + days * S.QI_REGEN_PER_DAY)
+        days, rem = divmod(max(0, int(si)), S.SI_PER_DAY)
+        gain = days * S.QI_REGEN_PER_DAY + rem * S.QI_REGEN_PER_SI
+        p.qi = min(cap, max(0.0, p.qi) + gain)
 
     def _check_death(self) -> bool:
         p = self.state.player
@@ -1488,7 +1506,7 @@ class Game:
         # 战斗结束 → 结算
         if b.ended():
             r.battle_over = b.outcome()
-            self._finish_battle(b, b.outcome(), r)
+            data["battle_si"] = self._finish_battle(b, b.outcome(), r)
             data["battle"] = None
             data["enemy_id"] = b.enemy.id
             data["enemy_name"] = b.enemy.name
@@ -1526,6 +1544,11 @@ class Game:
         p.qi = max(0.0, min(b.p.qi, BTL.battle_stats(p.realm_idx)["qi_max"]))
         spent = max(0, int(getattr(b, "stones0", p.spirit_stones)) - int(b.p.stones))
         p.spirit_stones = max(0, p.spirit_stones - spent)
+        # 0.5) 战斗耗时接回世界时间轴（P4-T1.4）：厘息 → 息（向上取整，最小 1 息）。
+        #      灵气已按战斗结果同步，故 regen=False（避免重复回灵）。
+        battle_li = int(b.state().get("t", 0) or 0)
+        battle_si = max(1, (battle_li + LI_PER_SI - 1) // LI_PER_SI)
+        self._advance_si(battle_si, regen=False)
         if outcome == BTL.BATTLE_WIN:
             lo, hi = e.loot_stones
             stones = self.rng.randint(lo, hi, f"battle_loot_stone_{e.id}")
@@ -1571,6 +1594,7 @@ class Game:
             r.text += "\n" + "\n".join(tail)
         else:
             r.text = "\n".join(tail)
+        return battle_si
 
     # ---------- 显示 ----------
     # ---------- 状态：结构化数据 + 叙事渲染（P3.5 分离） ----------
@@ -1629,6 +1653,11 @@ class Game:
             "owned": [self._owned_entry(g) for g in sorted(p.owned_gongfa or [])
                       if g in G.GONGFA],
             "turn": self.state.turn, "seed": self.seed,
+            # P4：统一时间轴（t 为唯一时钟；day 派生保留兼容）
+            "t": self.state.t, "day": self.state.day,
+            "shichen": S.shichen_of(self.state.t),
+            "day_phase": S.day_phase(self.state.t)[0],
+            "time_text": S.format_time(self.state.t),
             "battle": self._battle_data(),
         }
 

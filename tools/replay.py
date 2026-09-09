@@ -61,6 +61,7 @@ def fingerprint(game: Game, *, outcome: str = "", battle_stats: dict = None,
     fp = {
         "seed": game.seed,
         "turn": int(game.state.turn),
+        "t": int(game.state.t),           # P4：唯一时钟（息）
         "day": int(game.state.day),
         # 用 Rng 的**实时**游标（state.rng_counter 只在 snapshot/落盘时同步，内存里是旧值）
         "rng_counter": int(game.rng.counter),

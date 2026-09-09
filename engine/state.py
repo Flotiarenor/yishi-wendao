@@ -98,13 +98,23 @@ class Chronicle:
 
 @dataclass
 class GameState:
-    """一局（一世）完整状态。"""
+    """一局（一世）完整状态。
+
+    P4（时间统一到息）：唯一时钟 = `t`（息，整数，1 息 = 2 秒）。
+    `day` 是**派生只读属性**（`t // SI_PER_DAY`），对外保持旧语义；
+    旧档（只有 `day` 字段）载入时按 `day × SI_PER_DAY` 自动迁移。
+    """
     seed: int = 0
     rng_counter: int = 0
-    day: int = 0                       # 已过天数（用于计算年龄）
+    t: int = 0                         # 已过时间（息）
     player: Player = field(default_factory=Player)
     chronicle: Chronicle = field(default_factory=Chronicle)
     turn: int = 0                      # 玩家操作次数
+
+    @property
+    def day(self) -> int:
+        """自开局起的第几日（派生，只读）。"""
+        return int(self.t) // S.SI_PER_DAY
 
     def age_days_to_years(self, days: int) -> float:
         return days / S.DAYS_PER_YEAR
@@ -113,7 +123,8 @@ class GameState:
         return {
             "seed": self.seed,
             "rng_counter": self.rng_counter,
-            "day": self.day,
+            "t": self.t,
+            "day": self.day,           # 兼容旧读者（前端 / 指纹 / 旧工具）
             "player": self.player.to_dict(),
             "chronicle": self.chronicle.to_dict(),
             "turn": self.turn,
@@ -124,7 +135,8 @@ class GameState:
         gs = cls()
         gs.seed = d["seed"]
         gs.rng_counter = d["rng_counter"]
-        gs.day = d["day"]
+        # 旧档迁移：无 t 字段 → day × SI_PER_DAY
+        gs.t = int(d["t"]) if "t" in d else int(d.get("day", 0)) * S.SI_PER_DAY
         gs.player = Player.from_dict(d["player"])
         gs.chronicle = Chronicle.from_dict(d["chronicle"])
         gs.turn = d.get("turn", 0)
