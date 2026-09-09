@@ -144,7 +144,7 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
   `engine/worldmap.py`（200×200 格 = 20 000 里见方；多倍频值噪声 + 对比度拉伸 → 地形 / 水系 + 渡口 / 灵脉与内容点 /
   城镇选址 / 路网全部由 `world_seed` 确定性重建；代价场 6 种 profile + 窗口化 A\*（防穿角）+ 神识视野 +
   `WorldState` 只存差异）。**行为中性**：地形不进游戏循环——`tools/replay --compare` 20 个种子逐字段一致，
-  `game.py`/`state.py` 零改动。`tests/test_worldmap.py` 114 项。
+  `game.py`/`state.py` 零改动。`tests/test_worldmap.py` 117 项。
 - ⬜ **P4 起未做**（详见 `docs/实现路线图.md`）：**P4 地图与时间地基（进行中：T1/T2 已完成，下一步 T3 移动）**、五行宝光（P5）、死亡转世（P6）、人物势力（P7）、事件化（P8）、生成器（P9）、洞府子系统（P10）、突破考验（P11）、平衡标定（P12）、pywebview 桌面壳
 - ✅ **工具链（2026-09-10）**：`tools/content_check.py` 内容校验器（当前 0 错误 / 10 警告，
   全部为"demo 动作孤儿"这类预期提示；P4-R4 前它曾报 `guard`/`evade` 无消费者=回归护栏）；
