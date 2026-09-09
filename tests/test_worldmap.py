@@ -203,7 +203,7 @@ check("B14b realm_speed_mult 边界",
       == [1.0, 1.0, 1.5, 1.5, 2.5, 2.5, 4.0, 4.0, 6.0, 6.0])
 check("B14c vision_radius_li 边界",
       [S.vision_radius_li(r) for r in (1, 9, 10, 13, 14, 17, 18, 21, 22, 25)]
-      == [60.0, 60.0, 150.0, 150.0, 400.0, 400.0, 1000.0, 1000.0, 2500.0, 2500.0])
+      == [200.0, 200.0, 400.0, 400.0, 800.0, 800.0, 1600.0, 1600.0, 3000.0, 3000.0])
 
 # ============ C. 地形分布 ============
 print("\n== C 地形分布 ==")
@@ -809,6 +809,57 @@ check("J66 游戏循环未接入地形（game/state/sites 不引用 worldmap/reg
           for s in (_game_src, _state_src, _sites_src)))
 check("J67 本阶段不改动被保护文件（content/sites.py 旧地点清单仍在）",
       "LINGMAI" in _sites_src and "SHISHI" in _sites_src)
+
+# ============ K. 连续地形（P4-T2-R1 新增判据） ============
+print("\n== K 连续地形（精度与内存解耦） ==")
+import time as _time
+
+# K68 单点采样成本 ≤ 25 µs（懒坡度：常见地形只采 4 个场）
+_NBENCH = 20000
+_t0 = _time.perf_counter()
+for _i in range(_NBENCH):
+    WMAP.terrain_at(1000.0 + _i * 0.37, 2000.0 + _i * 0.53)
+_us = (_time.perf_counter() - _t0) / _NBENCH * 1e6
+check("K68 单点 terrain_at ≤ 25 µs", _us <= 25.0, f"{_us:.1f} µs")
+
+# K69 地形连续：同一 100 里格内、每 1 里采样，地形跳变率 ≤ 20%
+_cx, _cy = 60, 60                      # 取一格内部（避开特征格）
+_x0, _y0 = _cx * 100.0, _cy * 100.0
+_prev = WMAP.base_terrain_at(_x0 + 0.5, _y0 + 0.5)
+_jump = 0
+_total = 0
+for _k in range(1, 100):
+    _t = WMAP.base_terrain_at(_x0 + _k + 0.5, _y0 + 50.5)
+    _total += 1
+    if _t != _prev:
+        _jump += 1
+    _prev = _t
+check("K69 格内 1 里步长地形跳变率 ≤ 20%（格内不再是常数）",
+      _jump / _total <= 0.20, f"跳变 {_jump}/{_total}")
+
+# K70 同格不同坐标可给出不同地形（证伪"格内取常数"）
+_same_cell_diff = False
+for _ci in range(40, 60):
+    for _cj in range(40, 60):
+        _bx, _by = _ci * 100.0, _cj * 100.0
+        if (WMAP.base_terrain_at(_bx + 5.0, _by + 5.0)
+                != WMAP.base_terrain_at(_bx + 95.0, _by + 95.0)):
+            _same_cell_diff = True
+            break
+    if _same_cell_diff:
+        break
+check("K70 同格内不同坐标可得到不同地形", _same_cell_diff)
+
+# K71 视野半径 ≥ 全局特征栅格宽度（定案 §5）
+_worst = min(WMAP.vision_radius(1, t) for t in (R.T_MOUNTAIN, R.T_FOREST, R.T_SWAMP, R.T_SNOW))
+check("K71 练气期最差地形视野 ≥ 100 里（格宽）", _worst >= S.WORLD_CELL_LI,
+      f"{_worst:.0f} 里")
+
+# K72 特征格稀疏：河/湖/禁制/边界/锚点合计占比 < 15%
+_feat = sum(1 for _i in range(200 * 200)
+            if WMAP._cell_terrain(_i % 200, _i // 200) > 0)
+check("K72 特征格（河/湖/禁制/边界/锚点）占比 < 15%",
+      _feat / (200 * 200) < 0.15, f"{_feat / (200 * 200) * 100:.2f}%")
 
 print(f"\n== 结果：{_PASS} 过 / {_FAIL} 败 ==")
 sys.exit(1 if _FAIL else 0)

@@ -218,6 +218,69 @@ def fbm(seed: int, x: float, y: float, base_period: float, octaves: int,
     return total / norm
 
 
+# ============ 连续地形采样（P4-T2-R1：地形真相 = 纯函数，零存储） ============
+# 定案 §3.5：全局只物化稀疏特征（河/路/城/灵脉），**地形一律按需采样**。
+_SLOPE_EPS = _CELL_LI     # 坡度采样半径（里）——与首版"格心 ±1 格"同尺度，保证峡谷分布不漂移
+_SLOPE_OFFS = ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
+               (1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0))
+
+
+def _clamp01(v: float) -> float:
+    if v < 0.0:
+        return 0.0
+    if v > 1.0:
+        return 1.0
+    return v
+
+
+def _domain_bias_at(x: float, y: float) -> tuple:
+    """域级场偏置 (elev, moist, temp, fire)。"""
+    fb = R.DOMAINS[R.domain_at_xy(x, y)].field_bias
+    return (fb.get("elev", 0.0), fb.get("moist", 0.0),
+            fb.get("temp", 0.0), fb.get("fire", 0.0))
+
+
+def sample_fields(seed: int, x: float, y: float) -> tuple:
+    """任意坐标 → (elev, moist, temp, fire)，均归一化 [0,1]。纯函数、零存储。
+
+    与首版全图数组的取值口径**逐位一致**（同一 fbm / 对比度 / 域偏置 / 纬度项）。
+    """
+    seed = int(seed)
+    x = float(x)
+    y = float(y)
+    b = _domain_bias_at(x, y)
+    half = _WORLD_LI / 2.0
+    lat = 1.0 - abs(y - half) / half
+    e = _clamp01(_contrast(fbm(seed, x, y, _PERIOD_ELEV, _OCT_ELEV, "elev")) + b[0])
+    m = _clamp01(_contrast(fbm(seed, x, y, _PERIOD_MOIST, _OCT_MOIST, "moist")) + b[1])
+    t = _clamp01(_contrast(fbm(seed, x, y, _PERIOD_TEMP, _OCT_TEMP, "temp")) * 0.7
+                 + 0.5 * lat + b[2])
+    f = _clamp01(_contrast(fbm(seed, x, y, _PERIOD_FIRE, _OCT_FIRE, "fire")) + b[3])
+    return e, m, t, f
+
+
+def _slope_at(seed: int, x: float, y: float, e0: float) -> float:
+    """四向高程最大差。**仅在可能判为峡谷时调用**（省 4 次采样）。"""
+    b0 = _domain_bias_at(x, y)[0]
+    slope = 0.0
+    for dx, dy in _SLOPE_OFFS:
+        ee = _clamp01(_contrast(fbm(seed, x + dx * _SLOPE_EPS, y + dy * _SLOPE_EPS,
+                                    _PERIOD_ELEV, _OCT_ELEV, "elev")) + b0)
+        d = ee - e0
+        if d < 0.0:
+            d = -d
+        if d > slope:
+            slope = d
+    return slope
+
+
+def classify_point(seed: int, x: float, y: float) -> int:
+    """任意坐标 → **基础**地形 id（不含覆盖层）。纯函数、无实例状态。"""
+    e, m, t, f = sample_fields(seed, x, y)
+    slope = _slope_at(seed, x, y, e) if e > _TH_CANYON_ELEV else 0.0
+    return _classify(e, m, t, f, slope)
+
+
 # ============ 坐标工具 ============
 def clamp_xy(x: float, y: float) -> tuple:
     """把坐标 clamp 到世界内 [0, WORLD_LI]（负坐标同样 clamp，不抛异常）。"""
@@ -493,7 +556,8 @@ class WorldMap:
 
     def __init__(self, world_seed: int):
         self.world_seed = int(world_seed)
-        self._base = None            # bytearray 基础地形（不含路网 / 城镇覆盖）
+        self._base = None            # bytearray 基础地形（**生成用真相**；查询经 `_cell_terrain` 判定）
+        self._cell_tcache = {}       # idx → 特征地形 id（>0）或 -1（=纯噪声，走连续采样）
         self._elev = None            # list[float] 高程场（城镇评分用）
         self._wards = None           # tuple[(x, y, r), ...]
         self._rivers = None          # tuple[River, ...]
@@ -546,12 +610,11 @@ class WorldMap:
 
     def element_at(self, x: float, y: float) -> dict:
         """该点五行浓度 = 地形主五行 + 域级加成（归一化到和 = 1）。"""
-        cx, cy = cell_of(x, y)
-        tid = self._terrain_cell(cx, cy, True)
-        return R.element_concentration(tid, R.DOMAINS[R.domain_of_cell(cx, cy)])
+        tid = self.terrain_at(x, y, True)
+        return R.element_concentration(tid, R.DOMAINS[R.domain_at_xy(x, y)])
 
     def terrain_at_cell(self, cx: int, cy: int) -> int:
-        """格坐标 → **含覆盖层**的地形 id（越界 clamp）。"""
+        """格坐标 → **含覆盖层**的地形 id（= 该格中心采样；越界 clamp）。"""
         self._ensure_terrain()
         self._ensure_roads()
         if cx < 0:
@@ -565,8 +628,7 @@ class WorldMap:
         return self._terrain_cell(cx, cy, True)
 
     def base_terrain(self, cx: int, cy: int) -> int:
-        """**不含**路网 / 城镇覆盖的基础地形 id（越界 clamp）。"""
-        self._ensure_terrain()
+        """格坐标 → **不含**覆盖层的基础地形 id（= 该格中心连续采样；越界 clamp）。"""
         if cx < 0:
             cx = 0
         elif cx > _N - 1:
@@ -575,25 +637,20 @@ class WorldMap:
             cy = 0
         elif cy > _N - 1:
             cy = _N - 1
-        return self._base[cy * _N + cx]
+        return self.base_terrain_at(*center_of(cx, cy))
 
     def terrain_at(self, x: float, y: float, with_roads: bool = True) -> int:
-        """**含**覆盖层的地形 id：路网 / 城镇 → 基础地形（唯一对外地形语义）。"""
+        """任意**连续坐标** → 地形 id（覆盖层优先，否则连续噪声采样）。
+
+        P4-T2-R1：地形不再"按格取常数"——同一格内不同坐标可以有不同地形。
+        覆盖层（路网 / 城镇）本阶段仍按特征格判定（R2 改折线几何）。
+        """
         self._ensure_terrain()
         if with_roads:
             self._ensure_roads()
         else:
             self._ensure_towns()
         cx, cy = cell_of(x, y)
-        return self._terrain_cell(cx, cy, with_roads)
-
-    def elevation_at(self, x: float, y: float) -> float:
-        """高程场取值 [0,1]（城镇选址评分 / 调试用）。"""
-        self._ensure_terrain()
-        cx, cy = cell_of(x, y)
-        return self._elev[cy * _N + cx]
-
-    def _terrain_cell(self, cx: int, cy: int, with_roads: bool = True) -> int:
         idx = cy * _N + cx
         if with_roads:
             t = self._road_cells.get(idx)
@@ -602,7 +659,77 @@ class WorldMap:
         t = self._town_cells.get(idx)
         if t is not None:
             return t
-        return self._base[idx]
+        return classify_point(self.world_seed, x, y)
+
+    def _cell_terrain(self, cx: int, cy: int) -> int:
+        """格 → **特征地形** id；该格若无特征（= 纯噪声分类）返回 -1。
+
+        判据：生成期把河 / 湖 / 禁制 / 世界边界 / 旧地点锚点直接写进了 `_base`；
+        凡 `_base[idx] != classify_point(格心)` 的格即为"特征格"（稀疏，数量级 10³），
+        查询时按格取值；其余格一律走**连续采样**（这就是"精度与内存解耦"的落点）。
+        """
+        idx = cy * _N + cx
+        t = self._cell_tcache.get(idx)
+        if t is not None:
+            return t
+        t = self._base[idx]
+        if t != classify_point(self.world_seed, *center_of(cx, cy)):
+            self._cell_tcache[idx] = t
+            return t
+        self._cell_tcache[idx] = -1
+        return -1
+
+    def base_terrain_at(self, x: float, y: float) -> int:
+        """任意**连续坐标** → **不含覆盖层**的基础地形 id（特征格优先，否则连续采样）。"""
+        self._ensure_terrain()
+        cx, cy = cell_of(x, y)
+        t = self._cell_terrain(cx, cy)
+        if t > 0:
+            return t
+        return classify_point(self.world_seed, x, y)
+
+    def terrain_at(self, x: float, y: float, with_roads: bool = True) -> int:
+        """任意**连续坐标** → 地形 id（路网/城镇覆盖 → 特征格 → 连续采样）。
+
+        P4-T2-R1：地形不再"按格取常数"——同一格内不同坐标可以有不同地形。
+        """
+        self._ensure_terrain()
+        if with_roads:
+            self._ensure_roads()
+        else:
+            self._ensure_towns()
+        cx, cy = cell_of(x, y)
+        idx = cy * _N + cx
+        if with_roads:
+            t = self._road_cells.get(idx)
+            if t is not None:
+                return t
+        t = self._town_cells.get(idx)
+        if t is not None:
+            return t
+        t = self._cell_terrain(cx, cy)
+        if t > 0:
+            return t
+        return classify_point(self.world_seed, x, y)
+
+    def elevation_at(self, x: float, y: float) -> float:
+        """连续高程 [0,1]（城镇选址评分 / 调试用）——不再取格值。"""
+        return sample_fields(self.world_seed, x, y)[0]
+
+    def _terrain_cell(self, cx: int, cy: int, with_roads: bool = True) -> int:
+        """格坐标 → 地形 id（**该格中心的采样** + 覆盖层）——内部调用/渲染降采样用。"""
+        idx = cy * _N + cx
+        if with_roads:
+            t = self._road_cells.get(idx)
+            if t is not None:
+                return t
+        t = self._town_cells.get(idx)
+        if t is not None:
+            return t
+        t = self._cell_terrain(cx, cy)
+        if t > 0:
+            return t
+        return classify_point(self.world_seed, *center_of(cx, cy))
 
     # ---------- 惰性生成入口 ----------
     def _ensure_terrain(self):
@@ -688,25 +815,13 @@ class WorldMap:
         base = bytearray(size)
         for cy in range(n):
             row = cy * n
+            y = (cy + 0.5) * _CELL_LI
             for cx in range(n):
                 i = row + cx
-                # 坡度：格心与 8 邻的高程最大差（边界用已存在的邻格）
+                x = (cx + 0.5) * _CELL_LI
                 e = elev[i]
-                slope = 0.0
-                y0 = cy - 1 if cy > 0 else 0
-                y1 = cy + 1 if cy < n - 1 else n - 1
-                x0 = cx - 1 if cx > 0 else 0
-                x1 = cx + 1 if cx < n - 1 else n - 1
-                for ny in range(y0, y1 + 1):
-                    nrow = ny * n
-                    for nx in range(x0, x1 + 1):
-                        if nx == cx and ny == cy:
-                            continue
-                        d = elev[nrow + nx] - e
-                        if d < 0.0:
-                            d = -d
-                        if d > slope:
-                            slope = d
+                # 坡度：与查询路径**同一函数**（±1 格、8 向），保证"格心采样 == 连续采样"
+                slope = _slope_at(seed, x, y, e) if e > _TH_CANYON_ELEV else 0.0
                 base[i] = _classify(e, moist[i], temp[i], fire[i], slope)
 
         # 世界边界：最外 1 圈强制 T_VOID
