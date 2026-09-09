@@ -28,6 +28,10 @@ from content import regions as R
 from engine import settings as S
 from engine import worldmap as WM
 
+# 栅格常量（P4-T2：格宽 100→50 后不再硬编码）
+N = S.WORLD_CELLS
+M = N - 1
+
 _PASS = 0
 _FAIL = 0
 _SEED = 20260910
@@ -127,9 +131,9 @@ check("A3a terrain_at 重复调用一致", all(WMAP.terrain_at(10000.0, 10000.0)
                                         for _ in range(5)))
 _other = WM.WorldMap(_SEED)
 check("A3b 两个实例同坐标一致",
-      all(WMAP.terrain_at((cx + 0.5) * 100, (cy + 0.5) * 100)
-          == _other.terrain_at((cx + 0.5) * 100, (cy + 0.5) * 100)
-          for cx in range(0, 200, 23) for cy in range(0, 200, 29)))
+      all(WMAP.terrain_at((cx + 0.5) * S.WORLD_CELL_LI, (cy + 0.5) * S.WORLD_CELL_LI)
+          == _other.terrain_at((cx + 0.5) * S.WORLD_CELL_LI, (cy + 0.5) * S.WORLD_CELL_LI)
+          for cx in range(0, N, 23) for cy in range(0, N, 29)))
 _bad = ("import random", "hash(", "import time", "import datetime", "os.environ", "open(")
 _wm_src = _src(os.path.join("engine", "worldmap.py"))
 _rg_src = _src(os.path.join("content", "regions.py"))
@@ -146,10 +150,10 @@ check("A7 find_path 同参数两次逐位一致",
 _rc2 = [subprocess.call([sys.executable, "-X", "utf8", "-c", _sub_code], cwd=ROOT,
                         env=dict(os.environ, PYTHONHASHSEED=hv)) for hv in ("0", "12345")]
 check("A8 两个 PYTHONHASHSEED 子进程 checksum 一致", _rc2 == [0, 0], str(_rc2))
-_vn = [WM.value_noise(_SEED, i * 137.0, i * 219.0, 1600.0, "elev:0") for i in range(200)]
+_vn = [WM.value_noise(_SEED, i * 137.0, i * 219.0, 1600.0, "elev:0") for i in range(N)]
 check("A9a value_noise ∈ [0,1] 且非常数",
       all(0.0 <= v <= 1.0 for v in _vn) and len(set(_vn)) > 100)
-_fb = [WM.fbm(_SEED, i * 137.0, i * 219.0, 2000.0, 5, "elev") for i in range(200)]
+_fb = [WM.fbm(_SEED, i * 137.0, i * 219.0, 2000.0, 5, "elev") for i in range(N)]
 check("A9b fbm ∈ [0,1] 且非常数",
       all(0.0 <= v <= 1.0 for v in _fb) and len(set(_fb)) > 100)
 check("A9c 同参数噪声逐位可复现（salt / 种子敏感）",
@@ -162,11 +166,11 @@ check("A9c 同参数噪声逐位可复现（salt / 种子敏感）",
 
 # ============ B. 坐标与域 ============
 print("\n== B 坐标与域 ==")
-check("B9 世界常量", S.WORLD_CELLS == 200 and S.DOMAIN_LI == 4000.0 and S.WORLD_LI == 20000.0)
+check("B9 世界常量", S.WORLD_CELLS == N and S.DOMAIN_LI == 4000.0 and S.WORLD_LI == 20000.0)
 check("B10a cell_of 负坐标 clamp 到 0", WM.cell_of(-500.0, -1.0) == (0, 0))
-check("B10b cell_of 超界 clamp 到 199", WM.cell_of(99999.0, 25000.0) == (199, 199))
-check("B10c cell_of 正好边界", WM.cell_of(100.0, 200.0) == (1, 2)
-      and WM.cell_of(20000.0, 20000.0) == (199, 199))
+check("B10b cell_of 超界 clamp 到 M", WM.cell_of(99999.0, 25000.0) == (M, M))
+check("B10c cell_of 正好边界", WM.cell_of(S.WORLD_CELL_LI, S.WORLD_CELL_LI * 2) == (1, 2)
+      and WM.cell_of(20000.0, 20000.0) == (M, M))
 check("B11a 25 个域且 idx == iy*5+ix",
       len(R.DOMAINS) == 25 and all(d.idx == d.iy * 5 + d.ix for d in R.DOMAINS))
 check("B11b 域名全局唯一", len({d.name for d in R.DOMAINS}) == 25)
@@ -221,7 +225,7 @@ check("C16a 4 类硬阻挡全部出现", not _hard_present, str(_hard_present))
 check("C16b 硬阻挡总占比 ≤ 35%%（实测 %.2f%%）" % (100 * _hard_share), _hard_share <= 0.35)
 check("C16c 水域占比 1%%~30%%（实测 %.2f%%）" % (100 * _share[R.T_WATER]),
       0.01 <= _share[R.T_WATER] <= 0.30)
-_base_road = [(cx, cy) for cy in range(200) for cx in range(200)
+_base_road = [(cx, cy) for cy in range(N) for cx in range(N)
               if WMAP.base_terrain(cx, cy) in (R.T_ROAD, R.T_TRAIL)]
 _anchor_market = WM.cell_of(*R.LEGACY_ANCHORS["坊市"])
 check("C17a 未生成路网前 官道/小径 基础地形仅锚点「坊市」1 格",
@@ -229,8 +233,8 @@ check("C17a 未生成路网前 官道/小径 基础地形仅锚点「坊市」1 
 check("C17b 生成路网后 官道/小径 占比 > 0",
       _counts.get(R.T_ROAD, 0) + _counts.get(R.T_TRAIL, 0) > 0)
 _ring_ok = all(WMAP.base_terrain(cx, cy) == R.T_VOID
-               for cx in range(200) for cy in (0, 199)) and \
-    all(WMAP.base_terrain(cx, cy) == R.T_VOID for cy in range(200) for cx in (0, 199))
+               for cx in range(N) for cy in (0, M)) and \
+    all(WMAP.base_terrain(cx, cy) == R.T_VOID for cy in range(N) for cx in (0, M))
 check("C18 世界最外 1 圈全为 T_VOID", _ring_ok)
 _speeds = {R.T_ROAD: 44.0, R.T_TRAIL: 33.0, R.T_PLAIN: 22.0, R.T_GRASS: 22.0,
            R.T_FOREST: 17.0, R.T_HILL: 14.0, R.T_DESERT: 11.0, R.T_MOUNTAIN: 8.0,
@@ -248,12 +252,12 @@ check("C20b 禁制中心互距 ≥ 1500 里（判据下限 800）",
       and all(_diag_dist(_wards[i], _wards[j]) >= 800.0
               for i in range(len(_wards)) for j in range(i + 1, len(_wards))))
 _sample_ok = True
-for cy in range(0, 200, 7):
-    for cx in range(0, 200, 5):
-        idx = cy * 200 + cx
+for cy in range(0, N, 7):
+    for cx in range(0, N, 5):
+        idx = cy * N + cx
         if idx in WMAP._town_cells or idx in WMAP._road_cells:
             continue
-        _px, _py = (cx + 0.5) * 100, (cy + 0.5) * 100
+        _px, _py = (cx + 0.5) * S.WORLD_CELL_LI, (cy + 0.5) * S.WORLD_CELL_LI
         if WMAP._river_at(_px, _py):
             continue                      # R2b：河流是几何覆盖，不写进地形数组
         if WMAP.base_terrain(cx, cy) != WMAP.terrain_at(_px, _py):
@@ -269,33 +273,33 @@ check("D22b 每条河 ≥ 5 格", all(len(r.cells) >= 5 for r in WMAP.rivers))
 _bad_river = []
 for r in WMAP.rivers:
     for cx, cy in r.cells:
-        t = WMAP.terrain_at((cx + 0.5) * 100, (cy + 0.5) * 100)
+        t = WMAP.terrain_at((cx + 0.5) * S.WORLD_CELL_LI, (cy + 0.5) * S.WORLD_CELL_LI)
         if t not in (R.T_WATER, R.T_FORD):
             _bad_river.append((cx, cy, R.TERRAINS[t].name))
 check("D22c 河流格地形为 T_WATER 或 T_FORD", not _bad_river, str(_bad_river[:5]))
 check("D23a 每条河渡口 ≥ 1 个", all(len(r.fords) >= 1 for r in WMAP.rivers))
 check("D23b 渡口格练气期可通行",
-      all(WMAP.speed_at(f[0] * 100 + 50, f[1] * 100 + 50, realm_idx=1) > 0.0
+      all(WMAP.speed_at(f[0] * S.WORLD_CELL_LI + S.WORLD_CELL_LI / 2, f[1] * S.WORLD_CELL_LI + S.WORLD_CELL_LI / 2, realm_idx=1) > 0.0
           for r in WMAP.rivers for f in r.fords))
 _river_idx = set()
 for r in WMAP.rivers:
     for cx, cy in r.cells:
-        _river_idx.add(cy * 200 + cx)
+        _river_idx.add(cy * N + cx)
 _near_river = set()
 for idx in _river_idx:
-    cy, cx = divmod(idx, 200)
+    cy, cx = divmod(idx, N)
     for dy in (-2, -1, 0, 1, 2):
         for dx in (-2, -1, 0, 1, 2):
-            if 0 <= cx + dx < 200 and 0 <= cy + dy < 200:
-                _near_river.add((cy + dy) * 200 + cx + dx)
+            if 0 <= cx + dx < N and 0 <= cy + dy < N:
+                _near_river.add((cy + dy) * N + cx + dx)
 _vein_cnt = {}
 _vein_bad = []
 _vein_fallback = {}
 # 每域「严格合格格」数（山地/丘陵/峡谷 或 距河 ≤ 2 格，且非水域/硬阻挡）
 _strict_by_domain = [0] * 25
-for _cy in range(200):
-    for _cx in range(200):
-        _idx = _cy * 200 + _cx
+for _cy in range(N):
+    for _cx in range(N):
+        _idx = _cy * N + _cx
         _tid = WMAP.base_terrain(_cx, _cy)
         if _tid in R.HARD_BLOCK_IDS or _tid == R.T_WATER:
             continue
@@ -309,7 +313,7 @@ for p in WMAP.content_points:
     tid = WMAP.base_terrain(cx, cy)
     if tid in R.HARD_BLOCK_IDS or tid == R.T_WATER:
         _vein_bad.append((p.id, "地形"))
-    elif tid not in (R.T_MOUNTAIN, R.T_HILL, R.T_CANYON) and (cy * 200 + cx) not in _near_river:
+    elif tid not in (R.T_MOUNTAIN, R.T_HILL, R.T_CANYON) and (cy * N + cx) not in _near_river:
         # 平坦域兜底（任务书 §4.2 步骤 6）：该域严格合格格 < 3 时才允许
         if _strict_by_domain[p.domain_idx] < 3:
             _vein_fallback[p.domain_idx] = _vein_fallback.get(p.domain_idx, 0) + 1
@@ -359,14 +363,14 @@ check("E30c 每域配额全部取满", _full)
 # 判据 30 附加：该域 MAINLAND 内可通行格 ≥ 200 → 该域城镇数 ≥ 4
 _mbest, _mcomp, _mpass = WMAP._mainland()
 _mainland_by_domain = [0] * 25
-for _idx in range(40000):
+for _idx in range(N * N):
     if _mcomp[_idx] == _mbest:
-        _mainland_by_domain[R.domain_of_cell(_idx % 200, _idx // 200)] += 1
+        _mainland_by_domain[R.domain_of_cell(_idx % N, _idx // N)] += 1
 _rich_ok = all(len(_by_domain.get(d, [])) >= 4
-               for d in range(25) if _mainland_by_domain[d] >= 200)
-check("E30d MAINLAND ≥ 200 格的域城镇数 ≥ 4", _rich_ok,
+               for d in range(25) if _mainland_by_domain[d] >= 4 * 200)
+check("E30d MAINLAND ≥ 800 格的域城镇数 ≥ 4", _rich_ok,
       str([(d, _mainland_by_domain[d], len(_by_domain.get(d, [])))
-           for d in range(25) if _mainland_by_domain[d] >= 200
+           for d in range(25) if _mainland_by_domain[d] >= 4 * 200
            and len(_by_domain.get(d, [])) < 4]))
 _min_d = min(_diag_dist((a.x, a.y), (b.x, b.y))
              for i, a in enumerate(_towns) for b in _towns[i + 1:])
@@ -405,7 +409,7 @@ print("\n== F 路网 ==")
 check("F36a 路网非空（%d 段）" % len(WMAP.roads), len(WMAP.roads) > 0)
 _road_share = (_counts.get(R.T_ROAD, 0) + _counts.get(R.T_TRAIL, 0)) / _total
 check("F36b 官道/小径占比 ≥ 0.3%%（实测 %.2f%%）" % (100 * _road_share), _road_share >= 0.003)
-_bad_road = [(idx % 200, idx // 200) for idx, tid in WMAP._road_cells.items()
+_bad_road = [(idx % N, idx // N) for idx, tid in WMAP._road_cells.items()
              if tid in R.HARD_BLOCK_IDS]
 check("F37 路格不含硬阻挡", not _bad_road, str(_bad_road[:5]))
 _par = {t.id: t.id for t in _towns}
@@ -431,9 +435,9 @@ check("F39 跨域主路边 ≥ 20 条（实测 %d）" % _cross, _cross >= 20)
 _ford_cells = [idx for idx, tid in WMAP._road_cells.items() if tid == R.T_FORD]
 check("F40a 路网跨水处改标渡口（%d 格）" % len(_ford_cells), len(_ford_cells) >= 1)
 check("F40b 渡口格可通行且位于河面/水域",
-      all(WMAP.speed_at((idx % 200) * 100 + 50, (idx // 200) * 100 + 50, 1) > 0.0
+      all(WMAP.speed_at((idx % N) * S.WORLD_CELL_LI + S.WORLD_CELL_LI / 2, (idx // N) * S.WORLD_CELL_LI + S.WORLD_CELL_LI / 2, 1) > 0.0
           and (WMAP._base[idx] in (R.T_WATER, R.T_FORD)
-               or WMAP._river_at((idx % 200) * 100 + 50, (idx // 200) * 100 + 50))
+               or WMAP._river_at((idx % N) * S.WORLD_CELL_LI + S.WORLD_CELL_LI / 2, (idx // N) * S.WORLD_CELL_LI + S.WORLD_CELL_LI / 2))
           for idx in _ford_cells))
 _adj_pairs = sorted(
     ((_diag_dist((a.x, a.y), (b.x, b.y)), a.id, b.id, a, b)
@@ -447,14 +451,14 @@ def _path_cost(cells, with_roads: bool) -> float:
     total = 0.0
     for k in range(1, len(cells)):
         cx, cy = cells[k]
-        tid = WMAP.terrain_at((cx + 0.5) * 100, (cy + 0.5) * 100, with_roads=with_roads)
+        tid = WMAP.terrain_at((cx + 0.5) * S.WORLD_CELL_LI, (cy + 0.5) * S.WORLD_CELL_LI, with_roads=with_roads)
         t = R.TERRAINS[tid]
         if tid in R.HARD_BLOCK_IDS or (t.swim_only and 1 < S.SWIM_MIN_REALM):
             return float("inf")
         sp = t.speed * S.realm_speed_mult(1)
         if sp <= 0.0:
             return float("inf")
-        seg = 100.0 / sp * S.SI_PER_DAY
+        seg = S.WORLD_CELL_LI / sp * S.SI_PER_DAY
         if cells[k][0] != cells[k - 1][0] and cells[k][1] != cells[k - 1][1]:
             seg *= math.sqrt(2.0)
         total += seg
@@ -480,9 +484,9 @@ check("F41 同一路径 with_roads ≤ base（%d/%d 对相邻城镇）" % (_road
 print("\n== G 代价场与 A* ==")
 _sp_ok = True
 _sp_cells = []
-for cy in range(0, 200, 41):
-    for cx in range(0, 200, 37):
-        tid = WMAP.terrain_at((cx + 0.5) * 100, (cy + 0.5) * 100)
+for cy in range(0, N, 41):
+    for cx in range(0, N, 37):
+        tid = WMAP.terrain_at((cx + 0.5) * S.WORLD_CELL_LI, (cy + 0.5) * S.WORLD_CELL_LI)
         if tid in R.PASSABLE_IDS:
             _sp_cells.append((cx, cy, tid))
         if len(_sp_cells) >= 5:
@@ -493,45 +497,45 @@ for cx, cy, tid in _sp_cells:
     for realm in (1, 14):
         for shenfa in (0.0, 0.3):
             want = R.terrain_speed(tid) * S.realm_speed_mult(realm) * (1.0 + shenfa)
-            got = WMAP.speed_at((cx + 0.5) * 100, (cy + 0.5) * 100, realm, shenfa)
+            got = WMAP.speed_at((cx + 0.5) * S.WORLD_CELL_LI, (cy + 0.5) * S.WORLD_CELL_LI, realm, shenfa)
             if abs(got - want) > 1e-9:
                 _sp_ok = False
 check("G42 speed_at = 地形速度 × 境界系数 × (1+身法)", _sp_ok, str(_sp_cells))
 check("G43a 境界系数单调不减",
       all(S.realm_speed_mult(r) <= S.realm_speed_mult(r + 1) for r in range(1, 25)))
-_water_cell = next(((cx, cy) for cy in range(200) for cx in range(200)
+_water_cell = next(((cx, cy) for cy in range(N) for cx in range(N)
                     if WMAP.base_terrain(cx, cy) == R.T_WATER), None)
-_wx, _wy = (_water_cell[0] + 0.5) * 100, (_water_cell[1] + 0.5) * 100
+_wx, _wy = (_water_cell[0] + 0.5) * S.WORLD_CELL_LI, (_water_cell[1] + 0.5) * S.WORLD_CELL_LI
 check("G43b 练气不能渡水 / 筑基可渡水",
       WMAP.speed_at(_wx, _wy, 9) == 0.0 and WMAP.speed_at(_wx, _wy, 10) == 4.0 * 1.5,
       "%s / %s" % (WMAP.speed_at(_wx, _wy, 9), WMAP.speed_at(_wx, _wy, 10)))
-_hb = next(((cx, cy) for cy in range(200) for cx in range(200)
+_hb = next(((cx, cy) for cy in range(N) for cx in range(N)
             if WMAP.base_terrain(cx, cy) == R.T_VOID), None)
-_r_sb = WMAP.find_path(((_hb[0] + 0.5) * 100, (_hb[1] + 0.5) * 100), (10000.0, 10000.0))
+_r_sb = WMAP.find_path(((_hb[0] + 0.5) * S.WORLD_CELL_LI, (_hb[1] + 0.5) * S.WORLD_CELL_LI), (10000.0, 10000.0))
 check("G44a 起点硬阻挡 → start_blocked",
       _r_sb.blocked and _r_sb.reason == "start_blocked", _r_sb.reason)
-_r_gb = WMAP.find_path((10000.0, 10000.0), ((_hb[0] + 0.5) * 100, (_hb[1] + 0.5) * 100))
+_r_gb = WMAP.find_path((10000.0, 10000.0), ((_hb[0] + 0.5) * S.WORLD_CELL_LI, (_hb[1] + 0.5) * S.WORLD_CELL_LI))
 check("G44b 终点硬阻挡 → goal_blocked",
       _r_gb.blocked and _r_gb.reason == "goal_blocked", _r_gb.reason)
-_cells_in = all(0 <= c[0] <= 199 and 0 <= c[1] <= 199
+_cells_in = all(0 <= c[0] <= M and 0 <= c[1] <= M
                 for res in (_p1, _r_sb, WMAP.find_path((500.0, 500.0), (19500.0, 19500.0)))
                 for c in res.cells)
-check("G45 路径格坐标恒在 [0,199]", _cells_in)
+check("G45 路径格坐标恒在 [0,M]", _cells_in)
 # G45b 防穿角：1 格宽屏障不可斜穿（A* 与 _dijkstra 同步约束；复核新增）
 _cut = None
-for _cy in range(1, 199):
-    for _cx in range(1, 199):
+for _cy in range(1, M):
+    for _cx in range(1, M):
         for _dx, _dy in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
             _a = (_cx, _cy)
             _b = (_cx + _dx, _cy + _dy)
-            if not (1 <= _b[0] < 199 and 1 <= _b[1] < 199):
+            if not (1 <= _b[0] < M and 1 <= _b[1] < M):
                 continue
             _oa = (_cx + _dx, _cy)
             _ob = (_cx, _cy + _dy)
 
             def _blk(c):
                 # R2b：河流是几何覆盖，作屏障样本不稳定 → 只用**硬阻挡**（绝壁/虚空/深海）
-                t = WMAP.terrain_at((c[0] + 0.5) * 100, (c[1] + 0.5) * 100)
+                t = WMAP.terrain_at((c[0] + 0.5) * S.WORLD_CELL_LI, (c[1] + 0.5) * S.WORLD_CELL_LI)
                 return t in R.HARD_BLOCK_IDS
 
             if not _blk(_a) and not _blk(_b) and _blk(_oa) and _blk(_ob):
@@ -542,21 +546,21 @@ for _cy in range(1, 199):
     if _cut:
         break
 if _cut:
-    _rc = WMAP.find_path(((_cut[0][0] + 0.5) * 100, (_cut[0][1] + 0.5) * 100),
-                         ((_cut[1][0] + 0.5) * 100, (_cut[1][1] + 0.5) * 100))
+    _rc = WMAP.find_path(((_cut[0][0] + 0.5) * S.WORLD_CELL_LI, (_cut[0][1] + 0.5) * S.WORLD_CELL_LI),
+                         ((_cut[1][0] + 0.5) * S.WORLD_CELL_LI, (_cut[1][1] + 0.5) * S.WORLD_CELL_LI))
     check("G45b 1 格宽屏障不可斜穿（防穿角）",
           _rc.reason != "ok" or len(_rc.cells) > 2,
           "样本 %s→%s 结果 %s cells=%d" % (_cut[0], _cut[1], _rc.reason, len(_rc.cells)))
 else:
     check("G45b 1 格宽屏障不可斜穿（防穿角）", True, "本种子无天然样本")
 # 硬阻挡屏障 → 无路（取一个被绝壁完全包围的孤立格）
-_comp = [-1] * 40000
+_comp = [-1] * N * N
 _grp = []
-for _start in range(40000):
+for _start in range(N * N):
     if _comp[_start] >= 0:
         continue
-    _sy, _sx = divmod(_start, 200)
-    _t0 = WMAP.terrain_at((_sx + 0.5) * 100, (_sy + 0.5) * 100)
+    _sy, _sx = divmod(_start, N)
+    _t0 = WMAP.terrain_at((_sx + 0.5) * S.WORLD_CELL_LI, (_sy + 0.5) * S.WORLD_CELL_LI)
     if _t0 in R.HARD_BLOCK_IDS or _t0 == R.T_WATER:
         _comp[_start] = -2
         continue
@@ -566,16 +570,16 @@ for _start in range(40000):
     while _stack:
         _i = _stack.pop()
         _cur.append(_i)
-        _py, _px = divmod(_i, 200)
+        _py, _px = divmod(_i, N)
         for _dy in (-1, 0, 1):
             for _dx in (-1, 0, 1):
                 _ny, _nx = _py + _dy, _px + _dx
-                if not (0 <= _nx < 200 and 0 <= _ny < 200):
+                if not (0 <= _nx < N and 0 <= _ny < N):
                     continue
-                _j = _ny * 200 + _nx
+                _j = _ny * N + _nx
                 if _comp[_j] != -1:
                     continue
-                _t = WMAP.terrain_at((_nx + 0.5) * 100, (_ny + 0.5) * 100)
+                _t = WMAP.terrain_at((_nx + 0.5) * S.WORLD_CELL_LI, (_ny + 0.5) * S.WORLD_CELL_LI)
                 if _t in R.HARD_BLOCK_IDS or _t == R.T_WATER:
                     _comp[_j] = -2
                     continue
@@ -587,28 +591,28 @@ _iso = _grp[-1] if len(_grp) > 1 else []
 _iso_ok = False
 _iso_barrier = []
 if _iso:
-    _iy, _ix = divmod(_iso[0], 200)
-    _main_y, _main_x = divmod(_grp[0][0], 200)
-    _res_iso = WMAP.find_path(((_main_x + 0.5) * 100, (_main_y + 0.5) * 100),
-                              ((_ix + 0.5) * 100, (_iy + 0.5) * 100))
+    _iy, _ix = divmod(_iso[0], N)
+    _main_y, _main_x = divmod(_grp[0][0], N)
+    _res_iso = WMAP.find_path(((_main_x + 0.5) * S.WORLD_CELL_LI, (_main_y + 0.5) * S.WORLD_CELL_LI),
+                              ((_ix + 0.5) * S.WORLD_CELL_LI, (_iy + 0.5) * S.WORLD_CELL_LI))
     _iso_ok = _res_iso.blocked and _res_iso.reason == "no_path"
     for _dy in (-1, 0, 1):
         for _dx in (-1, 0, 1):
             _ny, _nx = _iy + _dy, _ix + _dx
-            if 0 <= _nx < 200 and 0 <= _ny < 200:
-                _iso_barrier.append(WMAP.terrain_at((_nx + 0.5) * 100, (_ny + 0.5) * 100))
+            if 0 <= _nx < N and 0 <= _ny < N:
+                _iso_barrier.append(WMAP.terrain_at((_nx + 0.5) * S.WORLD_CELL_LI, (_ny + 0.5) * S.WORLD_CELL_LI))
 check("G46a 硬阻挡屏障围出的孤立区 → no_path/blocked", _iso_ok,
       "孤立格 %s 屏障 %s" % (_iso[:1], [R.TERRAINS[t].name for t in _iso_barrier[:8]]))
 # 深海屏障：窗口内不可跨越（用公共 CostField + 独立 Dijkstra 验证）
-_deep = next((i for i in range(40000) if WMAP.base_terrain(i % 200, i // 200) == R.T_DEEPSEA),
+_deep = next((i for i in range(N * N) if WMAP.base_terrain(i % N, i // N) == R.T_DEEPSEA),
              None)
 _deep_ok = False
 if _deep is not None:
-    _dy2, _dx2 = divmod(_deep, 200)
-    _box = (max(0, _dx2 - 5), max(0, _dy2 - 5), min(199, _dx2 + 5), min(199, _dy2 + 5))
+    _dy2, _dx2 = divmod(_deep, N)
+    _box = (max(0, _dx2 - 5), max(0, _dy2 - 5), min(M, _dx2 + 5), min(M, _dy2 + 5))
     _fld = WMAP.cost_field("fastest", 1, 0.0, box=_box)
     _deep_ok = not _fld.passable(_dx2, _dy2) and \
-        WMAP.speed_at((_dx2 + 0.5) * 100, (_dy2 + 0.5) * 100, 1) == 0.0
+        WMAP.speed_at((_dx2 + 0.5) * S.WORLD_CELL_LI, (_dy2 + 0.5) * S.WORLD_CELL_LI, 1) == 0.0
 check("G46b 深海格在代价场中不可通行（屏障真实存在）", _deep_ok, str(_deep))
 # G47 最优性：小窗口内独立 Dijkstra
 _oa, _ob = _adj_pairs[0][3], _adj_pairs[0][4]
@@ -638,16 +642,16 @@ check("G49b 飞行耗时 ≈ 直线/250×43200（±5%）",
       "实测 %s 期望 %.0f" % (_r_fly.total_si, _fly_want))
 _ward_cell = WM.cell_of(WMAP.wards[0][0], WMAP.wards[0][1])
 check("G49c 飞行被禁制阻挡",
-      WMAP.find_path(((_ward_cell[0] + 0.5) * 100, (_ward_cell[1] + 0.5) * 100),
+      WMAP.find_path(((_ward_cell[0] + 0.5) * S.WORLD_CELL_LI, (_ward_cell[1] + 0.5) * S.WORLD_CELL_LI),
                      (14000.0, 10000.0), profile="fly", realm_idx=14).blocked)
 # 飞行可跨越深海
 _fly_deep_ok = False
 if _deep is not None:
-    _dy2, _dx2 = divmod(_deep, 200)
+    _dy2, _dx2 = divmod(_deep, N)
     _start = (_dx2 - 1, _dy2)
     _goal = (_dx2 + 1, _dy2)
-    _rd = WMAP.find_path(((_start[0] + 0.5) * 100, (_start[1] + 0.5) * 100),
-                         ((_goal[0] + 0.5) * 100, (_goal[1] + 0.5) * 100),
+    _rd = WMAP.find_path(((_start[0] + 0.5) * S.WORLD_CELL_LI, (_start[1] + 0.5) * S.WORLD_CELL_LI),
+                         ((_goal[0] + 0.5) * S.WORLD_CELL_LI, (_goal[1] + 0.5) * S.WORLD_CELL_LI),
                          profile="fly", realm_idx=14)
     _fly_deep_ok = (not _rd.blocked) or _rd.reason != "start_blocked"
 check("G49d 飞行可跨越深海（不因深海受阻）", _fly_deep_ok)
@@ -657,14 +661,14 @@ for _d, _aid, _bid, _a, _b in _adj_pairs[:40]:
     _rf = WMAP.path_between(_a, _b, profile="fastest")
     if _rf.blocked:
         continue
-    _road_f = sum(1 for cx, cy in _rf.cells if WMAP.terrain_at((cx + 0.5) * 100,
-                                                               (cy + 0.5) * 100) == R.T_ROAD)
+    _road_f = sum(1 for cx, cy in _rf.cells if WMAP.terrain_at((cx + 0.5) * S.WORLD_CELL_LI,
+                                                               (cy + 0.5) * S.WORLD_CELL_LI) == R.T_ROAD)
     _rs = WMAP.path_between(_a, _b, profile="stealth")
     if _rs.blocked:
         _st_ok = False
         break
-    _road_s = sum(1 for cx, cy in _rs.cells if WMAP.terrain_at((cx + 0.5) * 100,
-                                                               (cy + 0.5) * 100) == R.T_ROAD)
+    _road_s = sum(1 for cx, cy in _rs.cells if WMAP.terrain_at((cx + 0.5) * S.WORLD_CELL_LI,
+                                                               (cy + 0.5) * S.WORLD_CELL_LI) == R.T_ROAD)
     if _road_s > _road_f:
         _st_ok = False
         break
@@ -674,12 +678,12 @@ for _d, _aid, _bid, _a, _b in _adj_pairs[:40]:
         break
 check("G50a stealth 官道里程 ≤ fastest（抽查 %d 对）" % _st_tested, _st_ok and _st_tested >= 1)
 # G50b safe 对危险地形加价（代价模型口径，不依赖「某条路径恰好穿过火山/沼泽」的巧合）
-_sw_cell = next(((cx, cy) for cy in range(0, 200, 4) for cx in range(0, 200, 4)
+_sw_cell = next(((cx, cy) for cy in range(0, N, 4) for cx in range(0, N, 4)
                  if WMAP.base_terrain(cx, cy) in (R.T_SWAMP, R.T_LAVA)), None)
 _sf_ok = False
 if _sw_cell is not None:
     _box = (max(0, _sw_cell[0] - 1), max(0, _sw_cell[1] - 1),
-            min(199, _sw_cell[0] + 1), min(199, _sw_cell[1] + 1))
+            min(M, _sw_cell[0] + 1), min(M, _sw_cell[1] + 1))
     _ff = WMAP.cost_field("fastest", 1, 0.0, box=_box)
     _fs = WMAP.cost_field("safe", 1, 0.0, box=_box)
     if _ff.passable(*_sw_cell) and _fs.passable(*_sw_cell):
@@ -689,10 +693,10 @@ check("G50b safe 对火山/沼泽地形加价（代价模型）", _sf_ok, str(_s
 _sf_path_ok = True
 _sf_tested = 0
 _sf_pairs = []
-_sw_cells = [(cx, cy) for cy in range(0, 200, 4) for cx in range(0, 200, 4)
+_sw_cells = [(cx, cy) for cy in range(0, N, 4) for cx in range(0, N, 4)
              if WMAP.base_terrain(cx, cy) in (R.T_SWAMP, R.T_LAVA)]
 for _cx, _cy in _sw_cells[:24]:
-    _sx, _sy = (_cx + 0.5) * 100, (_cy + 0.5) * 100
+    _sx, _sy = (_cx + 0.5) * S.WORLD_CELL_LI, (_cy + 0.5) * S.WORLD_CELL_LI
     _rank = sorted(_towns, key=lambda t: (_diag_dist((t.x, t.y), (_sx, _sy)), t.id))
     _a0 = _rank[0]
     _opp = next((t for t in _rank[1:]
@@ -706,14 +710,14 @@ for _a, _b in _sf_pairs:
     if _rf.blocked:
         continue
     _mix_f = sum(1 for cx, cy in _rf.cells
-                 if WMAP.terrain_at((cx + 0.5) * 100, (cy + 0.5) * 100)
+                 if WMAP.terrain_at((cx + 0.5) * S.WORLD_CELL_LI, (cy + 0.5) * S.WORLD_CELL_LI)
                  in (R.T_LAVA, R.T_SWAMP))
     _rsf = WMAP.path_between(_a, _b, profile="safe")
     if _rsf.blocked:
         _sf_path_ok = False
         break
     _mix_s = sum(1 for cx, cy in _rsf.cells
-                 if WMAP.terrain_at((cx + 0.5) * 100, (cy + 0.5) * 100)
+                 if WMAP.terrain_at((cx + 0.5) * S.WORLD_CELL_LI, (cy + 0.5) * S.WORLD_CELL_LI)
                  in (R.T_LAVA, R.T_SWAMP))
     if _mix_s > _mix_f:
         _sf_path_ok = False
@@ -739,22 +743,22 @@ for _res in (_res, _p1, WMAP.find_path((500.0, 500.0), (19500.0, 19500.0))):
         _x1, _y1 = _res.cells[_k]
         if _x0 != _x1 and _y0 != _y1:
             # R2b：只校验**硬阻挡**（绝壁/虚空/深海）不穿角；河流是几何覆盖，不参与栅格屏障
-            if (WMAP.terrain_at(_x1 * 100 + 50, _y0 * 100 + 50) in R.HARD_BLOCK_IDS
-                    or WMAP.terrain_at(_x0 * 100 + 50, _y1 * 100 + 50) in R.HARD_BLOCK_IDS):
+            if (WMAP.terrain_at(_x1 * S.WORLD_CELL_LI + S.WORLD_CELL_LI / 2, _y0 * S.WORLD_CELL_LI + S.WORLD_CELL_LI / 2) in R.HARD_BLOCK_IDS
+                    or WMAP.terrain_at(_x0 * S.WORLD_CELL_LI + S.WORLD_CELL_LI / 2, _y1 * S.WORLD_CELL_LI + S.WORLD_CELL_LI / 2) in R.HARD_BLOCK_IDS):
                 _corner_ok = False
 check("G52d 对角步不穿角（两个正交邻格均可通行）", _corner_ok)
 
 # ============ H. 视野 ============
 print("\n== H 视野 ==")
-_plain_cell = next(((cx, cy) for cy in range(200) for cx in range(200)
+_plain_cell = next(((cx, cy) for cy in range(N) for cx in range(N)
                     if WMAP.base_terrain(cx, cy) == R.T_PLAIN), None)
-_forest_cell = next(((cx, cy) for cy in range(200) for cx in range(200)
+_forest_cell = next(((cx, cy) for cy in range(N) for cx in range(N)
                      if WMAP.base_terrain(cx, cy) == R.T_FOREST), None)
 _radii = [WMAP.vision_radius(r, R.T_PLAIN) for r in range(1, 26)]
 check("H53a 视野半径随境界单调不减", all(_radii[i] <= _radii[i + 1] for i in range(24)))
 check("H53b 林地视野 < 平原视野",
       WMAP.vision_radius(1, R.T_FOREST) < WMAP.vision_radius(1, R.T_PLAIN))
-_vx, _vy = (_plain_cell[0] + 0.5) * 100, (_plain_cell[1] + 0.5) * 100
+_vx, _vy = (_plain_cell[0] + 0.5) * S.WORLD_CELL_LI, (_plain_cell[1] + 0.5) * S.WORLD_CELL_LI
 _vis = WMAP.visible_points(_vx, _vy, 22)
 _vis_d = [_diag_dist((p.x, p.y), (_vx, _vy)) for p in _vis]
 _rad = WMAP.vision_radius(22, WMAP.terrain_at(_vx, _vy))
@@ -861,10 +865,10 @@ _worst = min(WMAP.vision_radius(1, t) for t in (R.T_MOUNTAIN, R.T_FOREST, R.T_SW
 check("K71 练气期最差地形视野 > 0", _worst > 0.0, f"{_worst:.0f} 里")
 
 # K72 特征格稀疏：河/湖/禁制/边界/锚点合计占比 < 15%
-_feat = sum(1 for _i in range(200 * 200)
-            if WMAP._cell_terrain(_i % 200, _i // 200) > 0)
+_feat = sum(1 for _i in range(N * N)
+            if WMAP._cell_terrain(_i % N, _i // N) > 0)
 check("K72 特征格（河/湖/禁制/边界/锚点）占比 < 15%",
-      _feat / (200 * 200) < 0.15, f"{_feat / (200 * 200) * 100:.2f}%")
+      _feat / (N * N) < 0.15, f"{_feat / (N * N) * 100:.2f}%")
 
 # ============ L. 路网几何化（P4-T2-R2） ============
 print("\n== L 路网几何化（真实宽度 + 独立判定容差） ==")
