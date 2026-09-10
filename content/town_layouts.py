@@ -12,6 +12,8 @@
 
 ⚠️ 水渠（原 `W`）已废：城内水系会切断道路，实测无收益。
 """
+import json
+import os
 from dataclasses import dataclass, field
 
 
@@ -206,10 +208,40 @@ def _from_export(d: dict) -> TownLayout:
 
 
 # ---------- 模板（用户用 tools/town_editor.html 画好导出） ----------
+# 两份来源：
+#   ① `town_layouts/*.json`：**用标注工具导出的原始 JSON**，直接读盘（单一真相，避免两处硬编码）
+#   ② `_EXPORTS`：早期内联的那份（带硬伤、暂不可用），留作追溯
+#
+# ⚠️ 这是**内容层**，读盘可接受：它不在引擎热路径上（只在渲染城内 / 生成设施点时读一次）。
+_TOWN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "town_layouts")
+
+
+def _load_json_layouts() -> list:
+    """读 `town_layouts/*.json`（工具导出格式），按文件名排序保证确定性。"""
+    out = []
+    if not os.path.isdir(_TOWN_DIR):
+        return out
+    for name in sorted(os.listdir(_TOWN_DIR)):
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(_TOWN_DIR, name), encoding="utf-8") as f:
+                d = json.load(f)
+            lay = _from_export(d)
+        except (OSError, ValueError, KeyError):
+            continue
+        if lay.rows:
+            out.append(lay)
+    return out
+
+
 # 记录：每份附带导出时的体检结果，供"能不能用"一眼判断。
+# ⚠️ **可用模板优先看 `town_layouts/*.json`**：那份是用户用修好判据的工具重新导出、
+#    经 `node tools/run_town_diagnose.js` 复核 **0 硬伤** 的成品，
+#    下面这份内联的一直被 `layouts_for_tier()` 过滤掉（errors 非空），只作追溯。
 _EXPORTS: list = [
     {
-        # 用户第二版手绘（2026-09-10）。骨架已通、密度足够（建筑 688 格、道路 769 格），
+        # 用户第一版手绘（2026-09-10）。骨架已通、密度足够（建筑 688 格、道路 769 格），
         # 但有**12 处城墙被路撞穿**（南北主街与环墙交叉未开门）→ 标为"不可直接用"，
         # 保留作"密度/分区参考"，等补门后启用。
         "name": "青石镇",
@@ -329,7 +361,7 @@ _EXPORTS: list = [
     },
 ]
 
-LAYOUTS: tuple = tuple(_from_export(d) for d in _EXPORTS)
+LAYOUTS: tuple = tuple(_from_export(d) for d in _EXPORTS) + tuple(_load_json_layouts())
 
 
 def layouts_for_tier(tier: str, usable_only: bool = True) -> tuple:

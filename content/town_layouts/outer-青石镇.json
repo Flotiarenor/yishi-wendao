@@ -1,0 +1,430 @@
+{
+  "editor": 3,
+  "name": "青石镇",
+  "tier": "outer",
+  "w": 48,
+  "h": 48,
+  "road_width": 2,
+  "legend": [
+    ". = 空 / 未定",
+    "+ = 道路",
+    "# = 建筑（涂黑）",
+    "G = 城门",
+    "= = 城墙",
+    "M = 坊市",
+    "I = 客栈",
+    "L = 藏经阁",
+    "R = 静室",
+    "T = 树林",
+    "p = 广场"
+  ],
+  "zone_legend": [
+    "r = 居民区",
+    "t = 茶楼 / 餐馆",
+    "m = 坊市 / 商铺",
+    "c = 寺观 / 祠堂",
+    "w = 作坊 / 工坊",
+    "g = 园林 / 空地",
+    "o = 衙署 / 广场",
+    "s = 仓储 / 货栈"
+  ],
+  "counts": {
+    ".": 352,
+    "+": 635,
+    "=": 164,
+    "G": 8,
+    "T": 92,
+    "#": 961,
+    "R": 12,
+    "M": 11,
+    "I": 56,
+    "p": 4,
+    "L": 9
+  },
+  "zone_counts": {
+    "r": 361,
+    "c": 19,
+    "g": 52,
+    "w": 90,
+    "t": 125,
+    "o": 41,
+    "m": 182,
+    "s": 97
+  },
+  "facilities": {
+    "坊市": 4,
+    "客栈": 4,
+    "藏经阁": 1,
+    "静室": 2,
+    "广场": 1,
+    "城门": 4
+  },
+  "facility_detail": [
+    {
+      "kind": "M",
+      "name": "坊市",
+      "size": 4,
+      "bbox": [
+        32,
+        14,
+        33,
+        15
+      ],
+      "center": [
+        33,
+        15
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "M",
+      "name": "坊市",
+      "size": 1,
+      "bbox": [
+        38,
+        15,
+        38,
+        15
+      ],
+      "center": [
+        38,
+        15
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "M",
+      "name": "坊市",
+      "size": 4,
+      "bbox": [
+        18,
+        27,
+        21,
+        27
+      ],
+      "center": [
+        20,
+        27
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "M",
+      "name": "坊市",
+      "size": 2,
+      "bbox": [
+        21,
+        30,
+        22,
+        30
+      ],
+      "center": [
+        22,
+        30
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "I",
+      "name": "客栈",
+      "size": 18,
+      "bbox": [
+        42,
+        17,
+        44,
+        22
+      ],
+      "center": [
+        43,
+        20
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "I",
+      "name": "客栈",
+      "size": 8,
+      "bbox": [
+        3,
+        19,
+        4,
+        22
+      ],
+      "center": [
+        4,
+        21
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "I",
+      "name": "客栈",
+      "size": 15,
+      "bbox": [
+        3,
+        25,
+        5,
+        29
+      ],
+      "center": [
+        4,
+        27
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "I",
+      "name": "客栈",
+      "size": 15,
+      "bbox": [
+        29,
+        25,
+        31,
+        29
+      ],
+      "center": [
+        30,
+        27
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "L",
+      "name": "藏经阁",
+      "size": 9,
+      "bbox": [
+        25,
+        27,
+        27,
+        29
+      ],
+      "center": [
+        26,
+        28
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "R",
+      "name": "静室",
+      "size": 6,
+      "bbox": [
+        6,
+        6,
+        8,
+        7
+      ],
+      "center": [
+        7,
+        7
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "R",
+      "name": "静室",
+      "size": 6,
+      "bbox": [
+        3,
+        16,
+        4,
+        18
+      ],
+      "center": [
+        4,
+        17
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "p",
+      "name": "广场",
+      "size": 4,
+      "bbox": [
+        21,
+        21,
+        22,
+        22
+      ],
+      "center": [
+        22,
+        22
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "G",
+      "name": "城门",
+      "size": 2,
+      "bbox": [
+        23,
+        2,
+        24,
+        2
+      ],
+      "center": [
+        24,
+        2
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "G",
+      "name": "城门",
+      "size": 2,
+      "bbox": [
+        2,
+        23,
+        2,
+        24
+      ],
+      "center": [
+        2,
+        24
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "G",
+      "name": "城门",
+      "size": 2,
+      "bbox": [
+        45,
+        23,
+        45,
+        24
+      ],
+      "center": [
+        45,
+        24
+      ],
+      "on_road": true
+    },
+    {
+      "kind": "G",
+      "name": "城门",
+      "size": 2,
+      "bbox": [
+        23,
+        45,
+        24,
+        45
+      ],
+      "center": [
+        24,
+        45
+      ],
+      "on_road": true
+    }
+  ],
+  "diagnostics": {
+    "note": "以下为 2026-09-11 用修好的体检口径重跑的结果（原文件存的 '8/8 城门无路' 已作废）",
+    "errors": [],
+    "warnings": [
+      "城外有 4 段短引路（4格@(24,1)、4格@(1,24)、4格@(47,24)、4格@(24,47)）——不接也不影响城内通行"
+    ],
+    "road_components": 5,
+    "gates": 8,
+    "verified_by": "node tools/run_town_diagnose.js"
+  },
+  "rows": [
+    ".......................++.......................",
+    ".......................++.......................",
+    "..=====================GG=====================..",
+    "..=TTTTTTTTTTTTTTTTTTTT++##############+#####=..",
+    "..=TTTTTTTTTTTTTTTTTTTT++##############+#####=..",
+    "..=TT++++++++++++++++++++++++++++++####+#####=..",
+    "..=TT+RRR####+#########++###+#####+####+#####=..",
+    "..=TT+RRR+++++#########++###+#####+####+#####=..",
+    "..=TT+###+###+#########++###+##++++####+#####=..",
+    "..=TT+###+###++++++++++++###+##+##+++++++++++=..",
+    "..=TT+TTT+###+#########++###++++#####+#######=..",
+    "..=TT+TTT+###+#########++###+##+#####+#######=..",
+    "..=TT+TTT+###+#########++###+##+++###+#######=..",
+    "..=TT+TTT+###+#########++###+##+#+++++#######=..",
+    "..=TT+TTT+###+#########++###+##+MM###+#######=..",
+    "..=TT++++++++++++++++++++###+##+MM###+M######=..",
+    "..=RR+TTT+###+###+#####++###+++++++++++++++++=..",
+    "..=RR+TTT+###+###+#####++###+########+####III=..",
+    "..=RR+TTT+++++++++#####++###+########+####III=..",
+    "..=II+TTT+###+###+#####++###+########+####III=..",
+    "..=II+TTT+###+###+#####++###++++++++++####III=..",
+    "..=II+###+###+###+###pp++###+########+####III=..",
+    "..=II+###+###+###+###pp++###+########+####III=..",
+    "++G++++++++++++++++++++++++++++++++++++++++++G++",
+    "++G++++++++++++++++++++++++++++++++++++++++++G++",
+    "..=III+#+####+###+#####++###+III+####++###+##=..",
+    "..=III+#+####+###++++++++###+III+#####+++#+##=..",
+    "..=III++++++++###+MMMM#++LLL+III+#######+#+##=..",
+    "..=III+######+###+#####++LLL+III+#######+#+##=..",
+    "..=III+######+###+#####++LLL+III+#######+#+##=..",
+    "..=###+######+++#+###MM++++++###+++++++++++##=..",
+    "..=###+######+#++++++++++###+###+#######+#+##=..",
+    "..=###++++++++++#######++###+###+#######+#+##=..",
+    "..=++++##+##+##+#######++###+###+++++++++++##=..",
+    "..=###++++##+##+#######++++++####+########+##=..",
+    "..=###+##+##+##+#######++###+####+########+##=..",
+    "..=###+##+##+##+#######++###++++++########+##=..",
+    "..=++++##+##+##+#######++###+####++++++++++++=..",
+    "..=##+###+++++++++#####++###+####+#######+###=..",
+    "..=##+###+######++#####++###+####+#######+###=..",
+    "..=##+###+######+++++++++###+####+#######+###=..",
+    "..=##++++++++++++###+##++###+####+#######+###=..",
+    "..=######+######+###+++++###++++++++++++++###=..",
+    "..=######+######+######++###+####+###########=..",
+    "..=######+######+######++++++####+###########=..",
+    "..=====================GG=====================..",
+    ".......................++.......................",
+    ".......................++......................."
+  ],
+  "zone_rows": [
+    "                                                ",
+    "                                                ",
+    "                                                ",
+    "                         rrrrrrrrrrrrrr rrrrr   ",
+    "                         rrrrrrrrrrrrrr rrrrr   ",
+    "                                   rrrr rrrrr   ",
+    "         cccc rrrrrrrrr  rrr ggrrr rrrr rrrrr   ",
+    "              rrrrrrrrr  rrr ggrrr rrrr rrrrr   ",
+    "      ccc ccc rrrrrrrrr  rrr gg    rrrr rrrrr   ",
+    "      ccc ccc            rrr gg ww              ",
+    "          ccc ttttooogg  rrr    wwmmm rrrrrrr   ",
+    "          ggg ttttooogg  rrr ss wwmmm rrrrrrr   ",
+    "          ggg ttttooogg  rrr ss   mmm rrrrrrr   ",
+    "          ggg ttttwwwmm  ttt ss m     mmmmrrr   ",
+    "          ggg ttttwwwmm  ttt ss   mmm mmmmrrr   ",
+    "                         ttt ss   mmm  mmmrrr   ",
+    "          ttt www ooooo  ttt                    ",
+    "          ttt www ooooo  mmm ttwwwsss ssmm      ",
+    "                  ooooo  mmm ttwwwsss ssmm      ",
+    "          mmm mmm ooooo  ttt ttwwwsss ssmm      ",
+    "          mmm mmm ooooo  ttt          ssmm      ",
+    "      ttt mmm mmm ooo    ttt mmmmmmmm mmmm      ",
+    "      ttt mmm mmm ooo    ttt mmmmmmmm mmmm      ",
+    "                                                ",
+    "                                                ",
+    "       t mmmm ttt mmmmt  ttt     gggg  mmm rr   ",
+    "       t mmmm mmt        tmm     ggggg   m rr   ",
+    "              mmt mmmmm          mmsssss m rr   ",
+    "       ttttmm mmt mmmmm          mmsssss m rr   ",
+    "       ttttmm sss mmmmm          wwwwwww m rr   ",
+    "   rrr rrrrrr   s mmmmm      tss           rr   ",
+    "   rrr rrrrrr o          ttt tss wwwwwww s rr   ",
+    "   rrr          ssmmmmm  tss tss wwwwwww s rr   ",
+    "       tt tt tt ssmmmmm  tss tss           rr   ",
+    "   rrr    tt tt ssmmmmm      gggg wwwwwwww rr   ",
+    "   rrr rr tt tt ssmmmmm  rrr gggg wwwwwwww rr   ",
+    "   rrr rr tt tt ssmmmmm  rrr      wwwwwwww rr   ",
+    "       rr tt tt ssmmmmm  rrr gggt               ",
+    "   rr rrr         sssss  rrr gggt wwwwwww rrr   ",
+    "   rr rrr ssssss  sssss  rrr gggt wwwwwww rrr   ",
+    "   rr rrr ssssss         rrr rrrr rrrrrww rrr   ",
+    "   rr            ttt tt  rrr rrrr rrrrrww rrr   ",
+    "   rrrrrr rrrrrr ttt     rrr              rrr   ",
+    "   rrrrrr rrrrrr ssssmm  rrr rrrr rrrrrrrrrrr   ",
+    "   rrrrrr rrrrrr ssssmm      rrrr rrrrrrrrrrr   ",
+    "                                                ",
+    "                                                ",
+    "                                                "
+  ]
+}
