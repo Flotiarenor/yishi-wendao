@@ -258,6 +258,37 @@ WebView2 把音频会话标成 `Microsoft Edge WebView2` 而不是宿主应用�
    必须经 HTTP 回到宿主去调（例如 `POST /api/audio {volume}`）。这条在动手做音效前就要写进契约。
 
 
+### A.7 Python 侧音频后端实测（2026-09-11，为"加音效"预研）
+
+结论先行：**推荐 miniaudio**（轻、能直接吃 FLAC/OGG、会话归我们、循环与音量都能自己控）。
+
+**五个候选全部满足"归我们"**（播放时音频会话进程 = python，state=1 活跃；峰值 0.41~0.86 确实出声）：
+
+| 后端 | 直接吃 FLAC | 循环 | 音量 | 音效（多路并发） | 安装体积 |
+|---|---|---|---|---|---|
+| **miniaudio** | ✅ | 需自己写（已验证可行） | 需在 PCM 上缩放（无 API） | 差（一个流） | **0.26 MB**，无依赖 |
+| pygame-ce | ✅ | ✅ 原生 play(loops=-1) | ✅ set_volume | ✅ 多 Sound 并发 | 9.2 MB（带 SDL2） |
+| just_playback | ✅ | ✅ loop_at_end | ✅ set_volume | 差 | 0.86 MB（内含 miniaudio） |
+| sounddevice | ❌ 需先解码（实测 DecodeError） | — | — | 中 | 0.96 MB + numpy |
+| winsound | ✅ | ❌ 无循环 API | ❌ 无音量 API | 差 | 标准库，零依赖 |
+
+**miniaudio 的两个坑（都实测踩过，写代码时必须照这个来）**：
+
+1. **生成器协议**：PlaybackDevice.start() 会 send(framecount) 索要样本，
+   而**生成器必须先 
+ext() 一次**（交出"原型数组"）才能收 send——
+   否则报 TypeError: can't send non-None value to a just-started generator（踩了两次）。
+   正确写法：g = gen(); next(g); dev.start(g)。
+2. **没有循环 API、没有音量 API**：循环要自己按请求帧数切片并在用尽时回到开头（已验证可无缝推进）；
+   音量要在 PCM 数组上乘系数（rray.array 的 	ypecode 要与原型同类型）。
+   两者都已在本机跑通（40 秒 / 3 圈，位置扫过 [0.017, 0.983]，无异常）。
+
+**若将来要"技能音效 + BGM 同时响"**，pygame-ce 更省事（原生多路 + 音量 + 循环），代价是 +9 MB 与 SDL2。
+**若要极简**（只有一首循环 BGM），miniaudio 最省；winsound 虽零依赖但缺循环与音量，不适合当游戏音频层。
+
+⚠️ **进程名**：现在音量合成器显示 python（进程就叫 python.exe）。要显示"一世问道"，
+得把壳打成 exe（PyInstaller 等）——与 A.4 的打包问题一并考虑。
+
 ### A.3 现在的实际能力（pywebview 6 + WinForms 后端）
 
 今天已经做到、且**不需要换任何东西**的：
