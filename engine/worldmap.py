@@ -93,7 +93,8 @@ _WARD_R_MAX = 400.0
 _WARD_RETRY = 20
 
 # 城镇：最小间距逐级放宽（里）
-_TOWN_MIN_GAPS = (300.0, 200.0, 150.0)
+_TOWN_R_MIN = 200.0          # 城镇影响半径下限（里）
+_TOWN_R_MAX = 620.0          # 上限
 _MAIN_TOWN = R.MAIN_TOWN_NAME
 
 # 内容点 id 序号位宽
@@ -378,6 +379,15 @@ def center_of(cx: int, cy: int) -> tuple:
     return ((cx + 0.5) * _CELL_LI, (cy + 0.5) * _CELL_LI)
 
 
+def _town_radius(seed: int, cx: int, cy: int) -> float:
+    """城镇影响半径（里）——**可变**：200~620 里，偏小分布。
+
+    统一半径会让城镇均匀铺排、连成直线；可变半径才有"集镇群 + 孤悬边镇"的层次。
+    """
+    u = hash01(seed, "townr", cx, cy)
+    return _TOWN_R_MIN + (_TOWN_R_MAX - _TOWN_R_MIN) * (u * u)
+
+
 def _town_xy(seed: int, cx: int, cy: int) -> tuple:
     """城镇实际坐标 = 格心 + **确定性抖动**（±0.5 格）。
 
@@ -584,7 +594,8 @@ PROFILES: dict = {
     "fly": {"desc": "飞行：忽略地形，仅禁制 / 虚空阻挡", "danger": False, "road_mult": 1.0,
             "forest_mult": 1.0, "water": "always", "fly": True},
     "road_plan": {"desc": "建路规划：湖泊 / 河流视为可通行（4 里/日）", "danger": False,
-                  "road_mult": 1.0, "forest_mult": 1.0, "water": "plan", "fly": False},
+                  "road_mult": 1.0, "forest_mult": 1.0, "water": "plan", "fly": False,
+                  "slope_pen": 3.0, "jitter": 1.10},
     "road_forced": {"desc": "建路兜底：水视为可通行（6 里/日），深海 / 绝壁仍阻挡",
                     "danger": False, "road_mult": 1.0, "forest_mult": 1.0,
                     "water": "forced", "fly": False},
@@ -1325,37 +1336,36 @@ class WorldMap:
             if d == R.CORE_DOMAIN_IDX:
                 ax, ay = R.LEGACY_ANCHORS["坊市"]
                 acx, acy = cell_of(ax, ay)
-                accepted.append((acy, acx, True))
-                all_towns.append((acy, acx, True))
+                accepted.append((acy, acx, True, _TOWN_R_MIN))
+                all_towns.append((acy, acx, True, _TOWN_R_MIN))
             picked = set()
-            # 间距 300 / 200 / 150 逐级放宽
-            for min_gap in _TOWN_MIN_GAPS:
+            # **可变影响半径**（200~620 里，偏小分布）：间距不再统一，
+            # 既有扎堆的集镇群，也有孤悬的边镇（此前统一 300 里 → 均匀铺排、连成直线）
+            for negscore, cy, cx, in_main in cands:
                 if len(accepted) >= quota:
                     break
-                gap2 = min_gap * min_gap
-                for negscore, cy, cx, in_main in cands:
-                    if len(accepted) >= quota:
+                if not in_main:
+                    continue
+                key = (cy, cx)
+                if key in picked:
+                    continue
+                x, y = _town_xy(seed, cx, cy)
+                r_new = _town_radius(seed, cx, cy)
+                ok = True
+                for acy, acx, _a, r_old in accepted + all_towns:
+                    ax, ay = _town_xy(seed, acx, acy)
+                    need = r_new if r_new > r_old else r_old
+                    dx = ax - x
+                    dy = ay - y
+                    if dx * dx + dy * dy < need * need - 1e-9:
+                        ok = False
                         break
-                    if not in_main:
-                        continue
-                    key = (cy, cx)
-                    if key in picked:
-                        continue
-                    x, y = _town_xy(seed, cx, cy)
-                    ok = True
-                    for acy, acx, _ in accepted + all_towns:
-                        ax, ay = _town_xy(seed, acx, acy)
-                        dx = ax - x
-                        dy = ay - y
-                        if dx * dx + dy * dy < gap2 - 1e-9:
-                            ok = False
-                            break
-                    if ok:
-                        picked.add(key)
-                        accepted.append((cy, cx, False))
-                        all_towns.append((cy, cx, False))
+                if ok:
+                    picked.add(key)
+                    accepted.append((cy, cx, False, r_new))
+                    all_towns.append((cy, cx, False, r_new))
 
-            for k, (cy, cx, is_anchor) in enumerate(accepted):
+            for k, (cy, cx, is_anchor, _r) in enumerate(accepted):
                 idx = cy * n + cx
                 self._town_cells[idx] = _T_ROAD
                 if is_anchor:
@@ -1811,10 +1821,17 @@ class WorldMap:
         否则格代价 = 各样本代价的最小值（保证窄于格宽的路 / 渡口被连续捕捉）。
         """
         self._profile_params(profile)
+        _prm = PROFILES[profile]
         if with_roads:
             self._ensure_roads()
         else:
             self._ensure_towns()
+        # 建路专用：坡度惩罚 + 确定性抖动 → 路沿河谷 / 山口走，不再笔直
+        # （**必须在 _ensure_\* 之后读 `_elev`**，否则首次调用时它还是 None）
+        _slope_pen = float(_prm.get("slope_pen", 0.0))
+        _jit = float(_prm.get("jitter", 0.0))
+        _seed = self.world_seed
+        _elev = self._elev
         step = int(step)
         if step < 1:
             step = 1
@@ -1885,6 +1902,13 @@ class WorldMap:
                             ok = False
                             break
                         cst = w / sp * inv_si * mult
+                        if _slope_pen:
+                            _e0 = _elev[fy * _N + fx]
+                            _e1 = _elev[(fy + 1 if fy + 1 < _N else fy) * _N + fx]
+                            _e2 = _elev[fy * _N + (fx + 1 if fx + 1 < _N else fx)]
+                            cst *= 1.0 + _slope_pen * (abs(_e1 - _e0) + abs(_e2 - _e0)) * 14.0
+                        if _jit:
+                            cst *= 1.0 + _jit * (hash01(_seed, "roadjit", fx, fy) - 0.5)
                         if cst < best:
                             best = cst
                     if not ok:

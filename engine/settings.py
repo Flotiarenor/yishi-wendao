@@ -183,7 +183,7 @@ DOMAIN_GRID = 5             # 5×5 = 25 域
 DOMAIN_LI = 4000.0          # 每域边长（里）
 WORLD_CELL_LI = 50.0        # 内部生成栅格（里）——"格"只是加速结构，不是设计概念（2026-09-10：100→50）
 WORLD_CELLS = 400           # 每轴格数 = WORLD_LI / WORLD_CELL_LI
-ROAD_PLAN_MULT = 2          # 路网规划用 2×2 格 = 100 里 的粗栅格
+ROAD_PLAN_MULT = 1          # 路网规划栅格步长（1 格 = 50 里；调粗会让路变直）
 
 REALM_SPEED_MULT = (1.0, 1.5, 2.5, 4.0, 6.0)   # 练气/筑基/金丹/元婴/化神（定案 §4.1）
 FLY_SPEED_LI_PER_DAY = 250.0                   # 飞行速度（定案 §4.3）
