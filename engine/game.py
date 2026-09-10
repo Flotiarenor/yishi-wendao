@@ -724,6 +724,43 @@ class Game:
         """写回世界坐标（**不动 `Player.location`**，避免为此触发世界生成）。"""
         self.state.world = self.state.world.with_pos(float(x), float(y))
 
+    def _set_pos_arrived(self, x: float, y: float):
+        """移动**落地**时写坐标并更新派生标签（地名 + 旧地点 id）。
+
+        为什么只在落地时算：算"这是哪座城镇"要遍历城镇列表（需世界）。
+        移动本身已经付过这个成本，落地时多算一次 ≈ 1 ms；若放进 `state_data()`
+        就会让**每次状态快照**都触发世界生成（实测把 `/api/new` 拖到 2.8~4 s）。
+        结果存进 `WorldState.places`（键 `place:<格序号>`），状态快照 O(1) 读取。
+        """
+        self._set_pos(x, y)
+        cx, cy = WM.cell_of(x, y)
+        name = self._place_name(x, y)
+        self.state.world.places["place:%d" % (cy * WM._N + cx)] = name
+        self._sync_location()
+
+    def place_name(self) -> str:
+        """当前位置的显示名（城镇名 / 野外 / 旧地点名）——读缓存，不建世界。"""
+        x, y = self.pos()
+        cx, cy = WM.cell_of(x, y)
+        hit = self.state.world.places.get("place:%d" % (cy * WM._N + cx))
+        if hit:
+            return hit
+        # 未走过的地方：坐标在旧地点锚点附近就报锚点名，否则"野外"
+        for nm in R.LEGACY_ANCHORS:
+            ax, ay = R.LEGACY_ANCHORS[nm]
+            if math.hypot(ax - x, ay - y) <= 60.0:
+                return nm
+        return "野外"
+
+    def _place_name(self, x: float, y: float) -> str:
+        """坐标 → 显示名（城镇名优先）。**会触发世界生成，只在落地时调用。**"""
+        for nm in R.LEGACY_ANCHORS:
+            ax, ay = R.LEGACY_ANCHORS[nm]
+            if math.hypot(ax - x, ay - y) <= 60.0:
+                return nm
+        t = self._near_town(x, y)
+        return t.name if t is not None else "野外"
+
     def at_market(self) -> bool:
         """是否身处坊市（按**到坊市锚点的距离**判定，不依赖世界生成）。
 
@@ -793,11 +830,13 @@ class Game:
         self.state.player.location = self._site_of_pos(*self.pos())
 
     def _place_label(self, x: float, y: float) -> str:
-        """坐标 → 显示名（城镇名优先，否则"野外"）。"""
+        """坐标 → 显示名（**会触发世界生成**；日常显示请用 `place_name()`）。"""
+        for nm in R.LEGACY_ANCHORS:
+            ax, ay = R.LEGACY_ANCHORS[nm]
+            if math.hypot(ax - x, ay - y) <= 60.0:
+                return nm
         t = self._near_town(x, y)
-        if t is not None:
-            return t.name
-        return "野外"
+        return t.name if t is not None else "野外"
 
     def _dest_pos(self, dest: str):
         """目的地输入 → (名字, x, y)；支持旧地点名与城镇名/id。找不到返回 None。"""
@@ -869,8 +908,8 @@ class Game:
         - 不带 `route`：只给候选路径（不推进时间、不移动）——无舆图则拒（`need_map`）。
         - 带 `route`：执行选中候选，按路径 `total_si` 推进真实时间。
 
-        近距（≤ `NEAR_MOVE_LI`，如坊市 ↔ 同镇的灵脉山）走快捷语义：同一聚落内挪动，
-        **不建世界、不做寻路**——否则每次挪步都要付一次世界生成（实测 ≈6 s）。
+        旧地点之间（如坊市 ↔ 灵脉山）走**固定连接**语义：同一聚落内挪动或旧地点互访**不建世界**
+        （否则每次挪步都要付一次世界生成，实测 ≈6 s；真实城镇之间的移动才做寻路）。
         """
         r = Result()
         p = self.state.player
@@ -881,34 +920,26 @@ class Game:
                            f"无此地名。可去：{names}；或已探索的城镇名。")
         name, gx, gy = d
         x, y = self.pos()
-        dist = math.hypot(gx - x, gy - y)
-        # 旧地点之间（含同聚落）：走固定连接语义，**不建世界**（见 _legacy_li 注释）
-        cur_site = ST.resolve(_loc_name(self.state.player.location))
         tgt_site = ST.resolve(name)
-        if cur_site is not None and tgt_site is not None:
-            li = _legacy_li(_loc_name(cur_site), _loc_name(tgt_site))
-            si = int(math.ceil(li / _OFFROAD_LI_PER_DAY * S.SI_PER_DAY)) if li > 0 else 0
-            if si > 0:
-                self._advance_si(si)
-            self._set_pos(gx, gy)
-            self.state.player.location = tgt_site
-            r.data = {"planned": False, "near": True, "legacy_move": True,
-                      "dest": {"name": name, "x": gx, "y": gy}, "li": round(li, 1),
-                      "si": si, "days": round(si / S.SI_PER_DAY, 1), "pos": [gx, gy],
-                      "location": {"id": tgt_site, "name": _loc_name(tgt_site)}}
-            r.text = (f"赶路{round(si / S.SI_PER_DAY, 1)}日，抵达【{name}】。"
-                      if si else f"你已在【{name}】。")
-            return _accept(r, r.text, r.data)
-        if dist <= S.NEAR_MOVE_LI:
-            self._advance_days(S.NEAR_MOVE_DAYS)
-            self._set_pos(gx, gy)
-            r.data = {"planned": False, "near": True,
-                      "dest": {"name": name, "x": gx, "y": gy},
-                      "days": S.NEAR_MOVE_DAYS, "si": int(S.NEAR_MOVE_DAYS * S.SI_PER_DAY),
-                      "pos": [gx, gy],
-                      "location": {"id": p.location, "name": _loc_name(p.location)}}
-            r.text = f"在聚落内辗转半日，抵达【{name}】。"
-            return _accept(r, r.text, r.data)
+        if tgt_site is not None:
+            cur_site = ST.resolve(_loc_name(p.location))
+            if cur_site is not None or math.hypot(gx - x, gy - y) <= S.NEAR_MOVE_LI:
+                if cur_site is not None:
+                    li = _legacy_li(_loc_name(cur_site), name)
+                else:
+                    li = math.hypot(gx - x, gy - y)
+                si = int(math.ceil(li / _OFFROAD_LI_PER_DAY * S.SI_PER_DAY)) if li > 0 else 0
+                if si > 0:
+                    self._advance_si(si)
+                self._set_pos_arrived(gx, gy)
+                p.location = tgt_site
+                days = round(si / S.SI_PER_DAY, 1)
+                r.data = {"planned": False, "near": True, "legacy_move": True,
+                          "dest": {"name": name, "x": gx, "y": gy}, "li": round(li, 1),
+                          "si": si, "days": days, "pos": [gx, gy],
+                          "location": {"id": tgt_site, "name": _loc_name(tgt_site)}}
+                r.text = (f"赶路{days}日，抵达【{name}】。" if si else f"你已在【{name}】。")
+                return _accept(r, r.text, r.data)
         if self.state.world.map_level == "none":
             return _reject(r, R_NEED_MAP,
                            "你手中无舆图，不知路在何方。只能按方向摸索着走"
@@ -919,7 +950,7 @@ class Game:
             return _reject(r, R_SITE_INVALID, "无此地名。")
         if not routes:
             return _reject(r, R_NO_PATH,
-                           f"以你如今修为，从【{self._place_label(x, y)}】到【{name}】"
+                           f"以你如今修为，从【{self.place_name()}】到【{name}】"
                            f"无路可通（绝壁 / 深海 / 禁制所阻）。")
         if route is None:
             r.ok = True
@@ -935,12 +966,48 @@ class Game:
                            f"候选序号 {idx} 无效（可选："
                            f"{'、'.join(str(q['idx']) for q in routes)}）。")
         self._advance_si(pick["si"])
-        self._set_pos(gx, gy)
-        self._sync_location()
+        self._set_pos_arrived(gx, gy)
+        p.location = tgt_site if tgt_site is not None else ST.SHISHI
         r.data = {"planned": False, "dest": {"name": name, "x": gx, "y": gy},
                   "route": pick, "si": pick["si"], "days": pick["days"],
                   "li": pick["li"], "pos": [gx, gy],
-                  "location": {"id": p.location, "name": _loc_name(p.location)}}
+                  "location": {"id": p.location, "name": self.place_name()}}
+        r.text = (f"沿【{pick['label']}】一路而行，{pick['days']} 日"
+                  f"（{pick['li']:.0f} 里）抵达【{name}】。")
+        self.state.chronicle.add(p.age_years, f"自别处动身，{pick['days']} 日后抵【{name}】。")
+        return _accept(r, r.text, r.data)
+        if self.state.world.map_level == "none":
+            return _reject(r, R_NEED_MAP,
+                           "你手中无舆图，不知路在何方。只能按方向摸索着走"
+                           "（march <东/东北/…>）。")
+        dest, routes = self._plan_routes(dest_input, profile=profile,
+                                         limit=self._route_limit())
+        if dest is None:
+            return _reject(r, R_SITE_INVALID, "无此地名。")
+        if not routes:
+            return _reject(r, R_NO_PATH,
+                           f"以你如今修为，从【{self.place_name()}】到【{name}】"
+                           f"无路可通（绝壁 / 深海 / 禁制所阻）。")
+        if route is None:
+            r.ok = True
+            r.reason = R_OK
+            r.data = {"planned": True, "dest": {"name": name, "x": gx, "y": gy},
+                      "routes": routes, "map_level": self.state.world.map_level}
+            r.text = self._routes_text(name, routes)
+            return r
+        idx = _as_int(route, -1)
+        pick = next((q for q in routes if q["idx"] == idx), None)
+        if pick is None:
+            return _reject(r, R_ROUTE_INVALID,
+                           f"候选序号 {idx} 无效（可选："
+                           f"{'、'.join(str(q['idx']) for q in routes)}）。")
+        self._advance_si(pick["si"])
+        self._set_pos_arrived(gx, gy)
+        p.location = tgt_site if tgt_site is not None else ST.SHISHI
+        r.data = {"planned": False, "dest": {"name": name, "x": gx, "y": gy},
+                  "route": pick, "si": pick["si"], "days": pick["days"],
+                  "li": pick["li"], "pos": [gx, gy],
+                  "location": {"id": p.location, "name": self.place_name()}}
         r.text = (f"沿【{pick['label']}】一路而行，{pick['days']} 日"
                   f"（{pick['li']:.0f} 里）抵达【{name}】。")
         self.state.chronicle.add(p.age_years, f"自别处动身，{pick['days']} 日后抵【{name}】。")
@@ -1009,8 +1076,8 @@ class Game:
         nx, ny = WM.clamp_xy(nx, ny)
         if travelled > 0.0:
             self._advance_si(int(math.ceil(si)))
-            self._set_pos(nx, ny)
-        label = self._place_label(nx, ny)
+            self._set_pos_arrived(nx, ny)
+        label = self.place_name()
         if blocked:
             r.reason = R_MARCH_BLOCKED
             r.ok = False
@@ -2012,7 +2079,7 @@ class Game:
             "lifespan_left": p.lifespan_left_years(),
             "heart_demon": p.heart_demon, "karma": p.karma, "alive": p.alive,
             "spirit_stones": p.spirit_stones,
-            "location": {"id": p.location, "name": _loc_name(p.location),
+            "location": {"id": p.location, "name": self.place_name(),
                          "x": self.pos()[0], "y": self.pos()[1],
                          "map_level": self.state.world.map_level},
             "inventory": [{"id": pid, "name": P.name_of(pid), "qty": qty}
