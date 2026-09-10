@@ -122,11 +122,20 @@
   <div class="row"><button class="act primary" id="check">运行体检</button></div>
   <div id="diag" class="hint">（点「运行体检」）</div>
 
-  <h2>导出</h2>
+  <h2>导入 / 导出</h2>
   <div class="row">
     <button class="act primary" id="export">生成模板 JSON</button>
     <button class="act" id="copy">复制</button>
   </div>
+  <div class="row">
+    <button class="act primary" id="importFile">导入 JSON 文件…</button>
+    <input type="file" id="fileInput" accept=".json,application/json" style="display:none">
+  </div>
+  <div class="row">
+    <button class="act" id="importText">从下面文本框导入</button>
+  </div>
+  <p class="hint" style="margin:2px 0">也可以直接把 JSON <b>粘到页面任意处</b>（Ctrl+V）自动导入。</p>
+  <pre id="out" contenteditable="true" spellcheck="false">（导出结果会出现在这里；也可以把 JSON 粘进来再点「从下面文本框导入」）</pre>
 </aside>
 
 <main>
@@ -160,7 +169,14 @@
       <div><span>方向键平移画布</span><span><kbd>←↑↓→</kbd></span></div>
       <div><span>运行体检 / 导出</span><span><kbd>Ctrl+Enter</kbd> <kbd>Ctrl+S</kbd></span></div>
     </div>
-    <pre id="out">（点「生成模板 JSON」，或按 Ctrl+S）</pre>
+    <div class="row">
+      <button class="act primary" id="importFile">导入 JSON 文件…</button>
+      <input type="file" id="fileInput" accept=".json,application/json" style="display:none">
+    </div>
+    <div class="row"><button class="act" id="importText">从下面文本框导入</button></div>
+    <p class="hint" style="margin:2px 0">也可以把 JSON <b>直接粘到页面任意处</b>（Ctrl+V）自动导入。</p>
+    <pre id="out" contenteditable="true" spellcheck="false">（导出结果会出现在这里；也可以把 JSON 粘进来再点「从下面文本框导入」）</pre>
+    <div id="impMsg" class="hint" style="min-height:20px"></div>
   </div>
 </main>
 
@@ -732,6 +748,89 @@ function exportJson() {
   document.getElementById("out").textContent = JSON.stringify(obj, null, 2);
 }
 
+// ---------- 导入 ----------
+/** 从导出的 JSON 恢复画布（宽高、要素层、分区层、镇名/档位、路宽）。 */
+function importJson(text) {
+  const msg = document.getElementById("impMsg");
+  let d;
+  try {
+    d = JSON.parse(String(text).trim());
+  } catch (e) {
+    msg.className = "hint err";
+    msg.textContent = "✗ JSON 解析失败：" + e.message;
+    return false;
+  }
+  const rows = d.rows || d.tile_rows;
+  if (!Array.isArray(rows) || !rows.length) {
+    msg.className = "hint err";
+    msg.textContent = "✗ 没找到 rows（要素网格）——请用本工具导出的 JSON，或含 rows 的对象。";
+    return false;
+  }
+  pushUndo();
+  H = rows.length;
+  W = Math.max(...rows.map((r) => String(r).length));
+  grid = rows.map((r) => {
+    const s = String(r);
+    return Array.from({ length: W }, (_, i) => s[i] || ".");
+  });
+  const zr = d.zone_rows;
+  zones = Array.from({ length: H }, (_, y) => {
+    const s = zr && zr[y] ? String(zr[y]) : "";
+    return Array.from({ length: W }, (_, x) => {
+      const c = s[x] || " ";
+      return c === " " ? "" : c;
+    });
+  });
+  if (d.name) document.getElementById("townName").value = d.name;
+  if (d.tier) document.getElementById("townTier").value = d.tier;
+  if (d.road_width) document.getElementById("roadW").value = d.road_width;
+  document.getElementById("gw").value = W;
+  document.getElementById("gh").value = H;
+  // 元素字符校验：不认识的字符按空处理（避免整张图看着正常但存了怪字符）
+  const known = new Set(TILE_ORDER);
+  const unknown = new Set();
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!known.has(grid[y][x])) { unknown.add(grid[y][x]); grid[y][x] = "."; }
+  }
+  resizeCanvas(); setTool("brush"); updateStatus("已导入");
+  const st = diagnose();
+  msg.className = "hint";
+  msg.innerHTML = `✓ 已导入 <b>${W}×${H}</b>`
+    + (d.name ? `「${d.name}」` : "")
+    + (unknown.size ? ` ｜ <span class="warn">未识别字符已置空：${[...unknown].join(" ")}</span>` : "")
+    + ` ｜ 体检：${st.errs.length ? `<span class="err">${st.errs.length} 处硬伤</span>` : '<span class="ok">无硬伤</span>'}`
+    + ` ｜ 设施：${Object.entries(st.fac).map(([k, v]) => k + " " + v + " 处").join("、") || "无"}`;
+  document.getElementById("out").textContent = JSON.stringify(d, null, 2);
+  return true;
+}
+document.getElementById("importFile").onclick = () => document.getElementById("fileInput").click();
+document.getElementById("fileInput").onchange = (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const fr = new FileReader();
+  fr.onload = () => importJson(fr.result);
+  fr.readAsText(f, "utf-8");
+  e.target.value = "";
+};
+document.getElementById("importText").onclick = () => {
+  const t = document.getElementById("out").textContent || "";
+  if (t.includes("（导出结果会出现在这里")) {
+    document.getElementById("impMsg").textContent = "文本框还是空的：先把 JSON 粘进来。";
+    return;
+  }
+  importJson(t);
+};
+// 直接粘到页面任意处也导入（输入框内除外）
+document.addEventListener("paste", (e) => {
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA")) return;
+  const txt = (e.clipboardData || window.clipboardData);
+  const s = txt && txt.getData ? txt.getData("text") : "";
+  if (!s || !s.trim().startsWith("{")) return;
+  e.preventDefault();
+  importJson(s);
+});
+
 // ---------- 快捷键 ----------
 document.addEventListener("keydown", (e) => {
   const t = e.target;
@@ -741,6 +840,7 @@ document.addEventListener("keydown", (e) => {
   if (ctrl && (k === "z" || k === "Z")) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (ctrl && (k === "y" || k === "Y")) { e.preventDefault(); redo(); return; }
   if (ctrl && (k === "s" || k === "S")) { e.preventDefault(); exportJson(); updateStatus("已导出 JSON"); return; }
+  if (ctrl && (k === "o" || k === "O")) { e.preventDefault(); document.getElementById("fileInput").click(); return; }
   if (ctrl && k === "Enter") { e.preventDefault(); document.getElementById("check").click(); return; }
   if (ctrl) return;
   // Alt + 数字 = 分区画笔
