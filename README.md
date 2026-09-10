@@ -2,10 +2,14 @@
 
 Python 单机文字修仙游戏。终端可玩，纯规则引擎 + 确定性随机，**运行时零 AI**。
 
-> ⚠️ **给新会话的入口**：先读本 README 的「当前状态」，再读 `docs/README.md`（文档地图：
-> 谁管什么、谁还算数），然后 `docs/会话交接.md`（取舍与未决问题）。深读顺序：
-> `docs/设计定案.md`（规则）→ `docs/实现路线图.md`（进度）→ `docs/tasks/`（未开始阶段的任务书；
+> ⚠️ **给新会话的入口**：先读本 README 的「当前状态」事实表（**全库唯一的现状来源**），
+> 再读 `docs/README.md`（文档地图：谁管什么、谁还算数、哪些数字已作废），
+> 然后 `docs/会话交接.md`（取舍与未决问题）。深读顺序：
+> `docs/设计定案.md`（规则）→ `docs/实现路线图.md`（进度与顺序）→ `docs/tasks/`（未开始阶段的任务书；
 > 已完成的在 `docs/archive/tasks/`）。
+>
+> 📌 **文档口径规则**：**测试项数 / 指纹 / 格宽 / 视野 / 性能这类数字，只在下面的事实表里维护**。
+> `docs/` 下各处出现的数字都是**当时快照**，不作现状依据；新增文档**不要再复制数字**。
 
 ## 运行
 
@@ -14,7 +18,7 @@ cd D:\project\Python\yishi-wendao
 .venv\Scripts\python.exe -X utf8 main.py            # 统一入口：起 Web 壳（浏览器玩）
 .venv\Scripts\python.exe -X utf8 main.py web --port 8000   # 覆盖默认端口（默认 8044）
 .venv\Scripts\python.exe -X utf8 main.py smoke --lives 20  # 自动 bot 回归（记录分布/战斗统计）
-.venv\Scripts\python.exe -X utf8 main.py test              # 一键跑全部测试（9 个单测 + 冒烟）
+.venv\Scripts\python.exe -X utf8 main.py test              # 一键跑全部测试（11 个单测文件 672 项 + 冒烟 20 局）
 .venv\Scripts\python.exe -X utf8 main.py check             # content/ 数据校验（--strict 警告也失败）
 .venv\Scripts\python.exe -X utf8 -m tools.dummy            # 木桩试招（7 流派对照）
 ```
@@ -69,6 +73,41 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
 一个提交一件事，文档与代码分开提。
 
 ## 当前状态（2026-09-10）
+
+> **本节是"当前是什么样"的唯一事实源。**其他文档（`docs/实现路线图.md`、`docs/会话交接.md`、
+> `docs/交接-*.md`、`docs/会话结算-*.md`）里的数字一律是**当时快照**，不作为现状依据。
+> **发现文档与代码不一致 → 以本节 + 代码为准，先跑 `main.py test` 复核再改文档。**
+
+### 一、实测事实（2026-09-10 本机复核）
+
+| 项 | 当前值 |
+|---|---|
+| 测试基线 | `.venv\Scripts\python.exe -X utf8 main.py test` → **672 项全过 / 0 败**（11 个单测文件 + 冒烟 20 局） |
+| 前端 E2E | `cd frontend ; npm run e2e` → **32 项全过** |
+| smoke 指纹 | **19 通关 / 1 道陨 ｜ 425 场（322 胜 / 0 负 / 103 逃）｜ 均终档 24.4** |
+| 世界指纹 | `seed 20260910` → `terrain_checksum = cc30c1a4039516d9`；河 75 / 镇 206 / 路网 205 段 / 内容点 1278 |
+| 世界栅格 | `WORLD_CELLS=400` × `WORLD_CELL_LI=50` 里 = **160 000 格**（"格"只是加速结构） |
+| 神识视野 | `VISION_RADIUS_LI = (60, 150, 400, 1000, 2500)` 里（练气→化神，**定案原值**；"视野 ≥ 格宽"是伪约束，已废除） |
+| 代价场 | `box=None, step=1` = 160 000 格 / 0.78 s；相邻城镇寻路冷 6 ms / 热 0.1 ms；跨半图（23 790 里）冷 0.87 s。**长距离延迟属预期，不是欠账** |
+| 首次进世界 | ≈ 6.1 s（含建路用的全图 `road_plan` 档，一次性） |
+| 内存 | 单世界实例常驻 ≈ 3.2 MB（`_base` 0.15 + `_elev` 2.44 + 特征层 ≈ 0.6）；`WORLD_CACHE_SIZE=4` → ≈ 13 MB。**内存不构成约束，不再作为优化理由** |
+| 分支 | 仅 `main`；`ROAD_PLAN_MULT = 1`（= 50 里，与栅格同档） |
+
+### 二、阶段进度
+
+- ✅ P0 生存循环 · P1 功法浅层 · P2 战斗最小闭环 · P3 功法深层 · P3.5 动作结果结构化 ·
+  P3.6 最小 Web 闭环 · P3.7 正式前端 · P3.8 效果系统 · P3.9 引擎加固 · P4-R3…R13（旧 P4 桶：战斗系统重构与后续修复）
+- ✅ **P4 T1** 时间刻度统一到息 ｜ ✅ **P4 T2（含 R1/R2a/R2b/R4）** 世界地图内核：连续采样 + 路/河几何化 + 格宽 50 里
+- ⬜ **P4 剩余：T3 移动 → T4 迷雾情报 → T5 城镇设施/场所限制 → T6 前端地图**（下一步 = **T3**）
+- ⬜ 之后：P5 五行宝光 → P6 结算转世 → P7 人物势力 → P8 事件化秘境 → P9 生成器 → P10 洞府 → P11 突破考验 → P12 平衡
+- 📌 **T2-R3「代价场窗口化」已收口**：窗口机制本就健康（跨半图只生成 1 个窗口、从不触发全图兜底），
+  原定三项（限流全图档 / 缓存按字节淘汰 / `_elev` 释放）**经实测均无触发场景**，判定为伪优化，不做。
+  详见 `docs/会话结算-2026-09-10.md` §六。
+
+### 三、已完成阶段的历史条目（按时间倒序，**数字仅供追溯**）
+
+> 以下条目是各阶段当时的记录，内含**当时**的测试项数与指纹；引擎持续演进，
+> 这些数字**已不再维护**，请勿作为现状引用（唯一现状见本节上方表格）。
 
 - ✅ **P0** 生存循环+经济：角色生成/时间/闭关/突破(灵石+丹药门槛)/寿元/存档回溯/探索/坊市/丹药
 - ✅ **P1** 功法浅层：13 技能 / 8 功法 / 主修被动加成修炼 / 开局赠书 / learn/forget / 坊市卖功法
@@ -141,10 +180,12 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
 - ✅ **P3.7** 正式前端（Vue3 + Vite + Pinia + TS，`frontend/`）：FastAPI 伺服 `frontend/dist`（SPA fallback，`/api` 404 不被吞）；布局 = **左状态（含切换按钮）/ 中上主内容（地图为主页面）/ 中下叙事日志（可拖拽高度）**，遇敌时**战斗临时接管主内容区**（时间轴 / 决策窗口 / 队列入队-执行 / 双方效果 / 动作可用性，常用动作在上、技能折叠）+ **修炼页**（闭关/参悟/突破/静养，参悟选择记忆）+ 坊市（灵石/背包/购买数量/买不起置灰）+ 书库（详情/装备/卸下）+ 编年史时间线 + 状态面板（五行亲和/业力）；旧 P3.6 极简面板删除（`server/static`）；顺带修复 `gongfa_detail` 对 7/12 功法抛 500 的 `SkillSpec.element` bug；`tests/test_server.py` 79 项 + 前端 E2E 27 项
 - ✅ **P4-T2** 世界地图内核（2026-09-10，主会话实现 + 独立复核）：
   `content/regions.py`（12 主地形 + 4 硬阻挡 + 湖泊/渡口；25 域 5×5、五行浓度、旧地点锚点）+
-  `engine/worldmap.py`（200×200 格 = 20 000 里见方；多倍频值噪声 + 对比度拉伸 → 地形 / 水系 + 渡口 / 灵脉与内容点 /
+  `engine/worldmap.py`（**400×400 格 @ 50 里** = 20 000 里见方；多倍频值噪声 + 对比度拉伸 → 地形 / 水系 + 渡口 / 灵脉与内容点 /
   城镇选址 / 路网全部由 `world_seed` 确定性重建；代价场 6 种 profile + 窗口化 A\*（防穿角）+ 神识视野 +
   `WorldState` 只存差异）。**行为中性**：地形不进游戏循环——`tools/replay --compare` 20 个种子逐字段一致，
   `game.py`/`state.py` 零改动。`tests/test_worldmap.py` 117 项。
+  ⚠️ 本条是**首版**描述；随后 R1/R2a/R2b/R4 重构（连续采样、路河几何化、格宽 100→50、视野回退原值），
+  当前值见本节上方事实表，重构细节见 `docs/实现路线图.md` P4 节。
 - ⬜ **P4 起未做**（详见 `docs/实现路线图.md`）：**P4 地图与时间地基（进行中：T1/T2 已完成，下一步 T3 移动）**、五行宝光（P5）、死亡转世（P6）、人物势力（P7）、事件化（P8）、生成器（P9）、洞府子系统（P10）、突破考验（P11）、平衡标定（P12）、pywebview 桌面壳
 - ✅ **工具链（2026-09-10）**：`tools/content_check.py` 内容校验器（当前 0 错误 / 10 警告，
   全部为"demo 动作孤儿"这类预期提示；P4-R4 前它曾报 `guard`/`evade` 无消费者=回归护栏）；
@@ -181,7 +222,7 @@ content/   实体数据（id 编码）：ids / effects 效果模板 / actions �
 server/    Web 壳：session 会话层(GameSession/RunManager) / savefile 存档 I/O / app FastAPI 路由（伺服 frontend/dist）/ main 启动
 frontend/  正式前端（Vue3+Vite+Pinia+TS）：src/api 客户端 / src/stores Pinia / src/views 各界面 / dist 构建产物（gitignore）
 tools/     开发期工具：dummy 木桩 / content_check 内容校验 / gen_skill 技能生成器 / replay 指纹重放
-tests/     smoke 自动 bot 回归 / test_clock 时间轴 / test_action 动作 / test_battle_time 时间轴战斗 / test_effects 效果 / test_gongfa_deep 功法深层 / test_server Web 壳 / test_hardening 引擎加固 / test_content_tools 内容工具 / test_replay 指纹重放
+tests/     smoke 自动 bot 回归 / test_time 统一时间刻度 / test_worldmap 世界地图内核 / test_effects 效果 / test_hardening 引擎加固 / test_clock 时间轴 / test_action 动作 / test_battle_time 时间轴战斗 / test_gongfa_deep 功法深层 / test_server Web 壳 / test_content_tools 内容工具 / test_replay 指纹重放（共 11 个单测文件 + smoke）
 docs/      见 docs/README.md 文档地图
 saves/     （运行时自动生成、已 gitignore；run_<seed>.json 档）
 .git/      本地仓库（根级；.venv/saves/logs/node_modules/dist 已忽略）
