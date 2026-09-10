@@ -192,6 +192,8 @@ _LEGACY_SITE_ANCHOR = {
     ST.name_of(sid): sid for sid in [ST.SHISHI] + list(ST.SITES)
 }
 _PROFILE_LABELS = {"fastest": "最快", "safe": "最安全", "stealth": "最隐蔽"}
+# 内容点种类 id → 中文名（与 `content/regions.CONTENT_KINDS` 单一来源；T4 迷雾叙事用）
+_KIND_NAME = {k: v.get("name", k) for k, v in R.CONTENT_KINDS.items()}
 
 
 def _legacy_li(a: str, b: str) -> float:
@@ -504,7 +506,8 @@ class Game:
         self._checkpoint = None  # 节点回溯快照
         self._active_battle = None  # 战斗会话（运行时状态，不入存档）
         self._route_memo = {}    # (起点,终点,档位,境界,舆图档) → 候选路径（纯缓存，不入存档）
-        self._map_memo = {}      # (坐标,舆图档,境界,已发现数) → map_view 结果（纯缓存）
+        self._map_memo = {}      # (坐标,舆图档,境界,发现版本,半径) → map_view 结果（纯缓存）
+        self._disc_ver = 0       # T4：`discovered` 每变更一次 +1（**不存档**，只作缓存失效用）
         # 调试：新局自动发资源（只在 `--debug` 时挂上，见 engine/debug.py）
         if DBG.enabled():
             _cfg = DBG.pending()
@@ -682,7 +685,8 @@ class Game:
         elif action == "travel":
             r = self._travel(str(kw.get("site", "")),
                              route=kw.get("route", None),
-                             profile=(str(kw.get("profile", "")) or None))
+                             profile=(str(kw.get("profile", "")) or None),
+                             x=kw.get("x", None), y=kw.get("y", None))
         elif action == "march":
             r = self._march(str(kw.get("direction", "") or kw.get("dir", "")))
         elif action == "debug":
@@ -901,14 +905,32 @@ class Game:
             return None
         return (t.name, float(t.x), float(t.y))
 
-    def _plan_routes(self, dest: str, profile: str = None, limit: int = 1):
+    def _clamp_target(self, x, y):
+        """坐标目的地归一化：解析为 float 并 clamp 到世界边界；非法返回 None。
+
+        防的是"前端点了地图边缘"这类越界点击——`cell_of` 会把越界坐标 clamp 到边界格，
+        路径照算，但落点会跑到世界之外，所以在这里先夹住。
+        """
+        try:
+            fx = float(x)
+            fy = float(y)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(fx) or math.isnan(fy):
+            return None
+        return WM.clamp_xy(fx, fy)
+
+    def _plan_routes(self, dest: str, profile: str = None, limit: int = 1, d=None):
         """规划候选路径（纯查询，不动状态）：返回 (目的地 tuple, [route dict…])。
+
+        `d` = 直接给目的地三元组 `(名字, x, y)`（**坐标目的地**用；给了就不再解析 `dest`）。
 
         带一层**实例内 memo**：同一 (起点, 终点, 档位, 境界, 舆图档) 只算一次。
         没有它时每次查询都是"建窗口代价场 + A*"（实测单次 0.1~1.2 s，首次还要叠
         世界生成 ≈6 s），而 bot / 前端会反复查同一对起终点。
         """
-        d = self._dest_pos(dest)
+        if d is None:
+            d = self._dest_pos(dest)
         if d is None:
             return None, []
         name, gx, gy = d
@@ -945,18 +967,30 @@ class Game:
         self._route_memo[mkey] = out
         return (name, gx, gy), out
 
-    def _travel(self, dest_input: str, route=None, profile: str = None) -> Result:
-        """前往地点：**两段式**（定案 §4.2）。
+    def _travel(self, dest_input: str, route=None, profile: str = None,
+                x=None, y=None) -> Result:
+        """前往地点 / **指定坐标**：**两段式**（定案 §4.2）。
 
         - 不带 `route`：只给候选路径（不推进时间、不移动）——无舆图则拒（`need_map`）。
         - 带 `route`：执行选中候选，按路径 `total_si` 推进真实时间。
+
+        **坐标目的地**（T4 附赠：地图上右键"走到那里"）：给 `x`/`y` 时 `dest_input` 留空，
+        终点就是该**世界坐标**（里），名字显示为该点附近地名（无城镇则"野外"）。
+        与地名目的地共用同一条代价场寻路管线，故**同样需要舆图**——定案 §4.2
+        "无舆图只能手动探路、不自动绕行"这条语义不能被右键点击绕过。
 
         旧地点之间（如坊市 ↔ 灵脉山）走**固定连接**语义：同一聚落内挪动或旧地点互访**不建世界**
         （否则每次挪步都要付一次世界生成，实测 ≈6 s；真实城镇之间的移动才做寻路）。
         """
         r = Result()
         p = self.state.player
-        d = self._dest_pos(dest_input)
+        to_point = x is not None or y is not None
+        d = self._dest_pos(dest_input) if not to_point else None
+        if to_point:
+            pt = self._clamp_target(x, y)
+            if pt is None:
+                return _reject(r, R_SITE_INVALID, "坐标不明：需要 x 与 y（世界坐标，单位里）。")
+            d = (self._place_label(*pt), pt[0], pt[1])
         if d is None:
             names = "、".join([ST.name_of(i) for i in [ST.SHISHI] + list(ST.SITES)])
             return _reject(r, R_SITE_INVALID,
@@ -964,6 +998,28 @@ class Game:
         name, gx, gy = d
         x, y = self.pos()
         tgt_site = ST.resolve(name)
+        if to_point and math.hypot(gx - x, gy - y) <= S.NEAR_MOVE_LI:
+            # 右键点在脚下附近（同一聚落内挪动，定案：不走世界寻路）。
+            # 这一支必须在 `map_level` 门槛**之前**——否则"无舆图连挪两步到村口"都做不到。
+            li = math.hypot(gx - x, gy - y)
+            si = int(math.ceil(li / _OFFROAD_LI_PER_DAY * S.SI_PER_DAY)) if li > 0 else 0
+            if si > 0:
+                self._advance_si(si)
+            self._set_pos_arrived(gx, gy)
+            _seen, _fresh = self.discover_here()
+            days = round(si / S.SI_PER_DAY, 1)
+            r.data = {"planned": False, "near": True, "to_point": True,
+                      "dest": {"name": name, "x": gx, "y": gy},
+                      "li": round(li, 1), "si": si, "days": days, "pos": [gx, gy],
+                      "newly_discovered": self._fresh_points_data(_fresh, gx, gy),
+                      "discovered_total": len(self.state.world.discovered),
+                      "location": {"id": p.location, "name": self.place_name()}}
+            r.text = (f"近处挪动 {li:.0f} 里，现处【{self.place_name()}】。"
+                      if si else "你已在此处。")
+            _dt = self._discover_text(_fresh)
+            if _dt:
+                r.text += "\n" + _dt
+            return _accept(r, r.text, r.data)
         if tgt_site is not None:
             cur_site = ST.resolve(_loc_name(p.location))
             if cur_site is not None or math.hypot(gx - x, gy - y) <= S.NEAR_MOVE_LI:
@@ -976,22 +1032,33 @@ class Game:
                     self._advance_si(si)
                 self._set_pos_arrived(gx, gy)
                 p.location = tgt_site
+                _seen, _fresh = self.discover_here()
                 days = round(si / S.SI_PER_DAY, 1)
                 r.data = {"planned": False, "near": True, "legacy_move": True,
                           "dest": {"name": name, "x": gx, "y": gy}, "li": round(li, 1),
                           "si": si, "days": days, "pos": [gx, gy],
+                          "newly_discovered": self._fresh_points_data(_fresh, gx, gy),
+                          "discovered_total": len(self.state.world.discovered),
                           "location": {"id": tgt_site, "name": _loc_name(tgt_site)}}
                 r.text = (f"赶路{days}日，抵达【{name}】。" if si else f"你已在【{name}】。")
+                _dt = self._discover_text(_fresh)
+                if _dt:
+                    r.text += "\n" + _dt
                 return _accept(r, r.text, r.data)
         if self.state.world.map_level == "none":
             return _reject(r, R_NEED_MAP,
                            "你手中无舆图，不知路在何方。只能按方向摸索着走"
                            "（march <东/东北/…>）。")
         dest, routes = self._plan_routes(dest_input, profile=profile,
-                                         limit=self._route_limit())
+                                         limit=self._route_limit(),
+                                         d=None if not to_point else (name, gx, gy))
         if dest is None:
             return _reject(r, R_SITE_INVALID, "无此地名。")
         if not routes:
+            if to_point:
+                return _reject(r, R_NO_PATH,
+                               f"此处（{gx:.0f}, {gy:.0f}）以你如今修为无路可通"
+                               f"（绝壁 / 深海 / 禁制所阻），换个去处。")
             return _reject(r, R_NO_PATH,
                            f"以你如今修为，从【{self.place_name()}】到【{name}】"
                            f"无路可通（绝壁 / 深海 / 禁制所阻）。")
@@ -999,6 +1066,7 @@ class Game:
             r.ok = True
             r.reason = R_OK
             r.data = {"planned": True, "dest": {"name": name, "x": gx, "y": gy},
+                      "to_point": bool(to_point),
                       "routes": routes, "map_level": self.state.world.map_level}
             r.text = self._routes_text(name, routes)
             return r
@@ -1010,49 +1078,23 @@ class Game:
                            f"{'、'.join(str(q['idx']) for q in routes)}）。")
         self._advance_si(pick["si"])
         self._set_pos_arrived(gx, gy)
-        p.location = tgt_site if tgt_site is not None else ST.SHISHI
+        if tgt_site is not None:
+            p.location = tgt_site
+        # 坐标目的地：`Player.location` 由 `_set_pos_arrived` 里的 `_sync_location()` 派生，
+        # 不再一刀切写成坊市（那会让"走到旷野"也显示身处坊市）。
+        _seen, _fresh = self.discover_here()
         r.data = {"planned": False, "dest": {"name": name, "x": gx, "y": gy},
+                  "to_point": bool(to_point),
                   "route": pick, "si": pick["si"], "days": pick["days"],
                   "li": pick["li"], "pos": [gx, gy],
+                  "newly_discovered": self._fresh_points_data(_fresh, gx, gy),
+                  "discovered_total": len(self.state.world.discovered),
                   "location": {"id": p.location, "name": self.place_name()}}
         r.text = (f"沿【{pick['label']}】一路而行，{pick['days']} 日"
                   f"（{pick['li']:.0f} 里）抵达【{name}】。")
-        self.state.chronicle.add(p.age_years, f"自别处动身，{pick['days']} 日后抵【{name}】。")
-        return _accept(r, r.text, r.data)
-        if self.state.world.map_level == "none":
-            return _reject(r, R_NEED_MAP,
-                           "你手中无舆图，不知路在何方。只能按方向摸索着走"
-                           "（march <东/东北/…>）。")
-        dest, routes = self._plan_routes(dest_input, profile=profile,
-                                         limit=self._route_limit())
-        if dest is None:
-            return _reject(r, R_SITE_INVALID, "无此地名。")
-        if not routes:
-            return _reject(r, R_NO_PATH,
-                           f"以你如今修为，从【{self.place_name()}】到【{name}】"
-                           f"无路可通（绝壁 / 深海 / 禁制所阻）。")
-        if route is None:
-            r.ok = True
-            r.reason = R_OK
-            r.data = {"planned": True, "dest": {"name": name, "x": gx, "y": gy},
-                      "routes": routes, "map_level": self.state.world.map_level}
-            r.text = self._routes_text(name, routes)
-            return r
-        idx = _as_int(route, -1)
-        pick = next((q for q in routes if q["idx"] == idx), None)
-        if pick is None:
-            return _reject(r, R_ROUTE_INVALID,
-                           f"候选序号 {idx} 无效（可选："
-                           f"{'、'.join(str(q['idx']) for q in routes)}）。")
-        self._advance_si(pick["si"])
-        self._set_pos_arrived(gx, gy)
-        p.location = tgt_site if tgt_site is not None else ST.SHISHI
-        r.data = {"planned": False, "dest": {"name": name, "x": gx, "y": gy},
-                  "route": pick, "si": pick["si"], "days": pick["days"],
-                  "li": pick["li"], "pos": [gx, gy],
-                  "location": {"id": p.location, "name": self.place_name()}}
-        r.text = (f"沿【{pick['label']}】一路而行，{pick['days']} 日"
-                  f"（{pick['li']:.0f} 里）抵达【{name}】。")
+        _dt = self._discover_text(_fresh)
+        if _dt:
+            r.text += "\n" + _dt
         self.state.chronicle.add(p.age_years, f"自别处动身，{pick['days']} 日后抵【{name}】。")
         return _accept(r, r.text, r.data)
 
@@ -1131,10 +1173,73 @@ class Game:
         return self.wmap.terrain_at_cell(cx, cy)
 
     def _in_vision(self, px: float, py: float, x: float, y: float, realm: int) -> bool:
-        """内容点是否在神识视野内（半径 × 地形遮蔽，按**玩家所在地形**计，与 data 层一致）。"""
+        """内容点是否在神识视野内（半径 × 地形遮蔽，按**玩家所在地形**计，与 data 层一致）。
+
+        ⚠️ T4 起**判定真相收敛到 `WorldMap.visible_points()`**（那个函数才是"视野内有哪些点"的
+        唯一实现）。本方法只保留给"单点是否可见"的轻量问法，语义与之等价：
+        `visible_points` 用 `_terrain_cell(cx, cy, True)` 取玩家所在地形，而这里用
+        `terrain_at_cell(cx, cy)`——后者内部就是 `_terrain_cell(cx, cy, True)`，故两者同值。
+        """
         wm = self.wmap
         vis = wm.vision_radius(realm, self._vision_tid())
         return math.hypot(px - x, py - y) <= vis
+
+    # ===== T4 迷雾：内容点发现（`discovered` 的**唯一**写入路径）=====
+    _DISCOVER_TEXT_KINDS = ("vein", "secret")   # 典籍里可循迹者：报真名
+
+    def discover_here(self, pos=None) -> tuple:
+        """在指定坐标（默认当前位置）做一次**神识踏勘**，把视野内的内容点写进 `discovered`。
+
+        定案 §5：实地层（矿脉/灵草/兽巢/遗迹/秘境入口/小径/驿站）**未知，需揭示**，
+        揭示方式之一是**神识半径**（随境界、按地形遮蔽缩减）。
+        T4 之前 `discovered` **只有读没有写**（`map_view` 用来判"已知"，却没人往里放东西），
+        所以"已知"实际等价于"此刻在视野内"——走过的地方一转身就忘了。
+        本方法把那条缺失的写入路径补上：**"走过即知"**。
+
+        语义（**唯一的判据来源**）：`discovered` = 玩家**曾亲身到过的位置**的神识视野内的内容点全集。
+        视野判定一律委托 `WorldMap.visible_points()`（不再自己算半径），避免出现第二套口径。
+
+        ⚠️ 会触发世界生成（首次 ≈6 s）——**只在移动落地时调用**，绝不可放进 `state_data()`。
+
+        返回 `((点…), (新发现的点…))`；新发现按 (距离, id) 升序。
+        """
+        wm = self.wmap
+        x, y = self.pos() if pos is None else (float(pos[0]), float(pos[1]))
+        realm = int(self.state.player.realm_idx)
+        seen = wm.visible_points(x, y, realm)
+        disc = self.state.world.discovered
+        fresh = tuple(p for p in seen if p.id not in disc)
+        if fresh:
+            for p in fresh:
+                disc.add(p.id)
+            # 缓存失效版本号：`discovered` 是**集合**，用 len() 当版本号会在
+            # "加一个减一个"时长度相同 → `_map_memo` 静默返回过期的迷雾结果。
+            self._disc_ver += 1
+        return seen, fresh
+
+    def _discover_text(self, fresh: tuple) -> str:
+        """新发现内容点的叙事行（纯文本，供日志流）。"""
+        if not fresh:
+            return ""
+        near, far = fresh[0], fresh[-1]
+        d = math.hypot(near.x - self.pos()[0], near.y - self.pos()[1])
+        if near.id == far.id:
+            head = f"神识扫过，察觉{_KIND_NAME.get(near.kind, near.kind)}【{near.name}】"
+        else:
+            head = (f"神识扫过，察觉{near.name}（{_KIND_NAME.get(near.kind, near.kind)}）"
+                    f"与【{far.name}】（{_KIND_NAME.get(far.kind, far.kind)}）等 "
+                    f"{len(fresh)} 处")
+        return head + f"（最近约 {d:.0f} 里），已记入舆图。"
+
+    @staticmethod
+    def _fresh_points_data(fresh: tuple, x: float, y: float) -> list:
+        """新发现内容点的结构化载荷（前端可直接标到图上）。"""
+        return [{"id": p.id, "kind": p.kind,
+                 "kind_name": _KIND_NAME.get(p.kind, p.kind),
+                 "name": p.name, "element": p.element,
+                 "x": round(p.x, 1), "y": round(p.y, 1),
+                 "dist_li": round(math.hypot(p.x - x, p.y - y), 1)}
+                for p in fresh]
 
     # ===== 地图信息出口（T4 迷雾的前置；P4-T3 后补：UI 要显示真实地图）=====
     def map_view(self, radius_li: float = None) -> dict:
@@ -1157,7 +1262,9 @@ class Game:
         rad = float(radius_li if radius_li is not None else S.MAP_VIEW_RADIUS_LI)
         realm = int(self.state.player.realm_idx)
         disc = self.state.world.discovered
-        key = (round(x, 1), round(y, 1), lvl, realm, len(disc), rad)
+        # 缓存键用 `_disc_ver`（单调递增），**不用 `len(disc)`**：`discovered` 是集合，
+        # 长度在"加一个减一个"时不变 → 会静默返回过期的迷雾结果（T4 踩过）。
+        key = (round(x, 1), round(y, 1), lvl, realm, self._disc_ver, rad)
         hit = self._map_memo.get(key)
         if hit is not None:
             return hit
@@ -1190,17 +1297,21 @@ class Game:
             })
         out["towns"].sort(key=lambda q: (q["dist_li"], q["id"]))
         if lvl == "detailed":
-            vis = wm.vision_radius(realm, self._vision_tid())
+            # 「已知」的唯一口径（T4 拍板）：**此刻神识视野内 ∪ discovered**。
+            # 视野判定委托 `WorldMap.visible_points()`——不要在引擎里再算第二套半径。
+            vis_ids = {p.id for p in wm.visible_points(x, y, realm)}
             for p in wm.content_points:
                 d = math.hypot(p.x - x, p.y - y)
                 if d > rad:
                     continue
-                known = p.id in disc or self._in_vision(p.x, p.y, x, y, realm)
+                known = p.id in disc or p.id in vis_ids
                 out["points"].append({
                     "id": p.id, "kind": p.kind, "name": p.name,
                     "element": p.element, "x": round(p.x, 1), "y": round(p.y, 1),
                     "dist_li": round(d, 1), "known": bool(known),
                     # 未知点：只给"有此一处"的轮廓，名字与归属留白（T4 迷雾语义）
+                    "known_by": ("discovered" if p.id in disc else
+                                 ("vision" if p.id in vis_ids else "")),
                     "name_shown": p.name if known else "（未探明）",
                 })
             out["points"].sort(key=lambda q: (not q["known"], q["dist_li"], q["id"]))
@@ -1279,6 +1390,7 @@ class Game:
         if travelled > 0.0:
             self._advance_si(int(math.ceil(si)))
             self._set_pos_arrived(nx, ny)
+        _seen, _fresh = self.discover_here((nx, ny)) if travelled > 0.0 else ((), ())
         label = self.place_name()
         if blocked:
             r.reason = R_MARCH_BLOCKED
@@ -1290,9 +1402,15 @@ class Game:
             r.reason = R_OK
             r.text = (f"你向【{direction}】摸索 {travelled:.0f} 里"
                       f"（{int(math.ceil(si))} 息），现处【{label}】。")
+        # 无舆图也在**亲身踏勘**——定案 §5 的四种揭示方式之一，故探路同样写 discovered
+        _dt = self._discover_text(_fresh)
+        if _dt:
+            r.text += "\n" + _dt
         r.data = {"direction": direction, "li": round(travelled, 1),
                   "si": int(math.ceil(si)), "blocked": bool(blocked),
                   "blocked_by": blocked or "", "pos": [nx, ny],
+                  "newly_discovered": self._fresh_points_data(_fresh, nx, ny),
+                  "discovered_total": len(self.state.world.discovered),
                   "place": label, "map_level": self.state.world.map_level}
         return r
 
@@ -1312,6 +1430,7 @@ class Game:
         # 走 `_travel` 而不是直接 `_plan_routes`：旧地点之间有固定连接语义，
         # 由 `_travel` 判定并走"不建世界"的快捷路径；只有**真实城镇**才需要寻路。
         move_txt = ""
+        move_fresh = []
         if p.location != site:
             mv = self._travel(site_name)
             if mv.ok:
@@ -1323,12 +1442,19 @@ class Game:
                 else:
                     move_txt = (f"赶路{days}日（{mv.data.get('li', 0):.0f} 里）"
                                 f"抵达【{site_name}】。")
+                move_fresh = list(mv.data.get("newly_discovered") or [])
             else:
                 return _reject(r, mv.reason, mv.text)
+        else:
+            # 已在原地：`_travel` 不会跑，故这里补一次踏勘（探索本身也是"亲身到过"）
+            _seen, _f = self.discover_here()
+            move_fresh = self._fresh_points_data(_f, *self.pos())
         self._advance_days(cfg.days_cost)
         lo, hi = cfg.stone
         gain = self.rng.randint(lo, hi, f"explore_stone_{site}")
         lines = [move_txt] if move_txt else []
+        if move_fresh:
+            lines.append(f"（神识所及，新记入舆图 {len(move_fresh)} 处。）")
         pills_gained = []
         if underlevel:
             p.heart_demon = min(100, p.heart_demon + 5)
@@ -1347,6 +1473,9 @@ class Game:
                                       for pid in pills_gained],
             "underlevel": underlevel, "battle_started": False,
             "enemy_id": None, "enemy_name": None, "lifespan_loss": 0,
+            # T4 迷雾：途中神识踏勘新记入舆图的内容点（含终点落地的）
+            "newly_discovered": move_fresh,
+            "discovered_total": len(self.state.world.discovered),
         }
         # 遇敌判定（P2：替代旧"危险=概率折寿"）：危险命中 → 从该地敌人池抽一只进战斗
         danger = cfg.danger * (2.0 if underlevel else 1.0)
