@@ -276,6 +276,30 @@ export interface MarketGongfa {
 export interface MarketData {
   pills: MarketPill[];
   gongfa: MarketGongfa[];
+  /** P4-T4B：情报货（买图改档 / 买当地点情报） */
+  intel?: MarketIntel;
+}
+
+/** 情报货单（`engine/game.py _intel_data()`） */
+export interface MarketIntel {
+  /** 当前舆图档位 none | coarse | detailed */
+  map_level: string;
+  map_level_label: string;
+  items: MarketIntelItem[];
+}
+
+export interface MarketIntelItem {
+  id: string;
+  name: string;
+  price: number;
+  /** map = 升舆图档位；point_intel = 揭示当地内容点 */
+  kind: string;
+  desc: string;
+  /** kind=map：买到后成为哪一档 */
+  map_level: string;
+  map_level_label: string;
+  /** kind=point_intel：揭示半径（里） */
+  radius_li: number;
 }
 
 // ---------- 书库 / 功法详情 ----------

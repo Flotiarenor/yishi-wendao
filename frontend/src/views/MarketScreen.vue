@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 
 import EmbeddedPanel from "@/components/EmbeddedPanel.vue";
-import type { MarketGongfa, MarketPill } from "@/types/contract";
+import type { MarketGongfa, MarketIntelItem, MarketPill } from "@/types/contract";
 import { useSessionStore } from "@/stores/session";
 import { useUiStore } from "@/stores/ui";
 
@@ -46,6 +46,9 @@ watch(
 
 const pills = computed<MarketPill[]>(() => market.value?.pills || []);
 const gongfa = computed<MarketGongfa[]>(() => market.value?.gongfa || []);
+/** P4-T4B：情报货（买图改档 / 买当地点情报） */
+const intel = computed(() => market.value?.intel ?? null);
+const intelItems = computed<MarketIntelItem[]>(() => intel.value?.items || []);
 </script>
 
 <template>
@@ -151,6 +154,42 @@ const gongfa = computed<MarketGongfa[]>(() => market.value?.gongfa || []);
                 @click="buy(g.name)"
               >
                 {{ g.owned ? "已拥有" : "购买" }}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3 v-if="intelItems.length" class="sec">
+        情报（现持【{{ intel?.map_level_label }}】）
+      </h3>
+      <table v-if="intelItems.length">
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>作用</th>
+            <th>价格</th>
+            <th>说明</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="it in intelItems" :key="it.id" :class="{ poor: stones < it.price }">
+            <td>{{ it.name }}</td>
+            <td class="desc">
+              <template v-if="it.kind === 'map'">舆图 →【{{ it.map_level_label }}】</template>
+              <template v-else>{{ Math.round(it.radius_li) }} 里内的内容点记入舆图</template>
+            </td>
+            <td class="mono">{{ it.price }}</td>
+            <td class="desc">{{ it.desc }}</td>
+            <td>
+              <button
+                class="btn mini"
+                :disabled="!s.canAct || stones < it.price"
+                :title="stones < it.price ? '灵石不足' : ''"
+                @click="buy(it.name)"
+              >
+                购买
               </button>
             </td>
           </tr>
