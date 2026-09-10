@@ -18,7 +18,7 @@ cd D:\project\Python\yishi-wendao
 .venv\Scripts\python.exe -X utf8 main.py            # 统一入口：起 Web 壳（浏览器玩）
 .venv\Scripts\python.exe -X utf8 main.py web --port 8000   # 覆盖默认端口（默认 8044）
 .venv\Scripts\python.exe -X utf8 main.py smoke --lives 20  # 自动 bot 回归（记录分布/战斗统计）
-.venv\Scripts\python.exe -X utf8 main.py test              # 一键跑全部测试（11 个单测文件 672 项 + 冒烟 20 局）
+.venv\Scripts\python.exe -X utf8 main.py test              # 一键跑全部测试（12 个单测文件 714 项 + 冒烟 20 局）
 .venv\Scripts\python.exe -X utf8 main.py check             # content/ 数据校验（--strict 警告也失败）
 .venv\Scripts\python.exe -X utf8 -m tools.dummy            # 木桩试招（7 流派对照）
 ```
@@ -82,10 +82,10 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
 
 | 项 | 当前值 |
 |---|---|
-| 测试基线 | `.venv\Scripts\python.exe -X utf8 main.py test` → **672 项全过 / 0 败**（11 个单测文件 + 冒烟 20 局） |
+| 测试基线 | `.venv\Scripts\python.exe -X utf8 main.py test` → **714 项全过 / 0 败**（12 个单测文件 + 冒烟 20 局） |
 | 前端 E2E | `cd frontend ; npm run e2e` → **32 项全过** |
-| smoke 指纹 | **19 通关 / 1 道陨 ｜ 425 场（322 胜 / 0 负 / 103 逃）｜ 均终档 24.4** |
-| 世界指纹 | `seed 20260910` → `terrain_checksum = cc30c1a4039516d9`；河 75 / 镇 206 / 路网 205 段 / 内容点 1278 |
+| smoke 指纹 | **18 通关 / 2 道陨 ｜ 410 场（308 胜 / 0 负 / 102 逃）｜ 均终档 23.8**（T3 移动接真后新基线；旧基线 19/1、425 场、24.4） |
+| 世界指纹 | `seed 20260910` → `terrain_checksum = cc30c1a4039516d9`（**T3 未改动**，路网/地形没动）；河 75 / 镇 206 / 路网 205 段 / 内容点 1278 |
 | 世界栅格 | `WORLD_CELLS=400` × `WORLD_CELL_LI=50` 里 = **160 000 格**（"格"只是加速结构） |
 | 神识视野 | `VISION_RADIUS_LI = (60, 150, 400, 1000, 2500)` 里（练气→化神，**定案原值**；"视野 ≥ 格宽"是伪约束，已废除） |
 | 代价场 | `box=None, step=1` = 160 000 格 / 0.78 s；相邻城镇寻路冷 6 ms / 热 0.1 ms；跨半图（23 790 里）冷 0.87 s。**长距离延迟属预期，不是欠账** |
@@ -98,11 +98,16 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
 - ✅ P0 生存循环 · P1 功法浅层 · P2 战斗最小闭环 · P3 功法深层 · P3.5 动作结果结构化 ·
   P3.6 最小 Web 闭环 · P3.7 正式前端 · P3.8 效果系统 · P3.9 引擎加固 · P4-R3…R13（旧 P4 桶：战斗系统重构与后续修复）
 - ✅ **P4 T1** 时间刻度统一到息 ｜ ✅ **P4 T2（含 R1/R2a/R2b/R4）** 世界地图内核：连续采样 + 路/河几何化 + 格宽 50 里
-- ⬜ **P4 剩余：T3 移动 → T4 迷雾情报 → T5 城镇设施/场所限制 → T6 前端地图**（下一步 = **T3**）
+- ✅ **P4 T3 移动**：候选路径（最快/最安全/最隐蔽，按舆图档位给）+ 手动探路（遇硬阻挡与水域停下）
+  + 移动耗时按**真实路径**结算（`TRAVEL_DAYS` 退役）+ 存档位置迁到 `WorldState.pos`
+- ⬜ **P4 剩余：T4 迷雾情报 → T5 城镇设施/场所限制 → T6 前端地图**（下一步 = **T4**）
 - ⬜ 之后：P5 五行宝光 → P6 结算转世 → P7 人物势力 → P8 事件化秘境 → P9 生成器 → P10 洞府 → P11 突破考验 → P12 平衡
 - 📌 **T2-R3「代价场窗口化」已收口**：窗口机制本就健康（跨半图只生成 1 个窗口、从不触发全图兜底），
   原定三项（限流全图档 / 缓存按字节淘汰 / `_elev` 释放）**经实测均无触发场景**，判定为伪优化，不做。
   详见 `docs/会话结算-2026-09-10.md` §六。
+- 📌 **T3 遗留**：「最安全」档**兑现不了"更安全"**——实测 `fastest` 的 90% 路径本就不含危险地形
+  （`Terrain.danger` 与"慢"高度相关），危险需与速度**正交**才有意义，属 **P7 动态实体**的建模范围。
+  详见 `docs/tasks/P4-T3-移动.md` §0.2。
 
 ### 三、已完成阶段的历史条目（按时间倒序，**数字仅供追溯**）
 
@@ -222,7 +227,7 @@ content/   实体数据（id 编码）：ids / effects 效果模板 / actions �
 server/    Web 壳：session 会话层(GameSession/RunManager) / savefile 存档 I/O / app FastAPI 路由（伺服 frontend/dist）/ main 启动
 frontend/  正式前端（Vue3+Vite+Pinia+TS）：src/api 客户端 / src/stores Pinia / src/views 各界面 / dist 构建产物（gitignore）
 tools/     开发期工具：dummy 木桩 / content_check 内容校验 / gen_skill 技能生成器 / replay 指纹重放
-tests/     smoke 自动 bot 回归 / test_time 统一时间刻度 / test_worldmap 世界地图内核 / test_effects 效果 / test_hardening 引擎加固 / test_clock 时间轴 / test_action 动作 / test_battle_time 时间轴战斗 / test_gongfa_deep 功法深层 / test_server Web 壳 / test_content_tools 内容工具 / test_replay 指纹重放（共 11 个单测文件 + smoke）
+tests/     smoke 自动 bot 回归 / test_time 统一时间刻度 / test_worldmap 世界地图内核 / test_travel 移动 / test_effects 效果 / test_hardening 引擎加固 / test_clock 时间轴 / test_action 动作 / test_battle_time 时间轴战斗 / test_gongfa_deep 功法深层 / test_server Web 壳 / test_content_tools 内容工具 / test_replay 指纹重放（共 12 个单测文件 + smoke）
 docs/      见 docs/README.md 文档地图
 saves/     （运行时自动生成、已 gitignore；run_<seed>.json 档）
 .git/      本地仓库（根级；.venv/saves/logs/node_modules/dist 已忽略）

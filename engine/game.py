@@ -186,24 +186,6 @@ _LEGACY_SITE_ANCHOR = {
 _PROFILE_LABELS = {"fastest": "最快", "safe": "最安全", "stealth": "最隐蔽"}
 
 
-def _pt_seg_dist2(px: float, py: float, ax: float, ay: float,
-                  bx: float, by: float) -> float:
-    """点到线段的**平方**距离（避免开方，只用于比较）。"""
-    dx = bx - ax
-    dy = by - ay
-    seg2 = dx * dx + dy * dy
-    if seg2 <= 0.0:
-        return (px - ax) ** 2 + (py - ay) ** 2
-    t = ((px - ax) * dx + (py - ay) * dy) / seg2
-    if t < 0.0:
-        t = 0.0
-    elif t > 1.0:
-        t = 1.0
-    cx = ax + t * dx
-    cy = ay + t * dy
-    return (px - cx) ** 2 + (py - cy) ** 2
-
-
 def _legacy_li(a: str, b: str) -> float:
     """两个**旧地点**之间的里程（里，锚点欧氏距离）。
 
