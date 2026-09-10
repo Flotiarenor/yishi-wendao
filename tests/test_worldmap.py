@@ -833,9 +833,10 @@ check("J65 main.py 已挂载 test_worldmap 单测",
 _game_src = _src(os.path.join("engine", "game.py"))
 _state_src = _src(os.path.join("engine", "state.py"))
 _sites_src = _src(os.path.join("content", "sites.py"))
-check("J66 游戏循环未接入地形（game/state/sites 不引用 worldmap/regions）",
-      all("worldmap" not in s and "regions" not in s
-          for s in (_game_src, _state_src, _sites_src)))
+check("J66 T3 起游戏循环**已接入**世界（game/state 引用 worldmap 且 GameState 带 world 字段）",
+      "worldmap" in _game_src and "worldmap" in _state_src
+      and "world" in _state_src and "worldmap" not in _sites_src,
+      "J66 曾是「地形不进游戏循环」的守卫断言；P4-T3 移动落地后该前提作废，改为正向断言")
 check("J67 本阶段不改动被保护文件（content/sites.py 旧地点清单仍在）",
       "LINGMAI" in _sites_src and "SHISHI" in _sites_src)
 

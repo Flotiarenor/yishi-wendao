@@ -53,9 +53,11 @@ from content import actions as CA
 from content import enemies as EM
 from content import gongfa as G
 from content import pills as P
+from content import regions as R
 from content import sites as ST
 from content import skills as SK
 from engine import battle as BTL
+from engine import worldmap as WM          # P4-T3：世界地图内核（连续坐标 / 代价场 / 寻路）
 from engine.clock import LI as LI_PER_SI   # 1 息 = 100 厘息（P4：战斗耗时接回世界轴）
 from engine.rng import Rng
 from engine.state import GameState, Player, Chronicle
@@ -115,6 +117,12 @@ R_MISSING_PILL = "missing_pill"
 R_SITE_INVALID = "site_invalid"
 R_ALREADY_THERE = "already_there"
 R_SITE_UNEXPLORABLE = "site_unexplorable"
+# 移动（P4-T3，定案 §4）
+R_NEED_MAP = "need_map"              # 无舆图：不给目的地寻路，只能手动探路
+R_ROUTE_INVALID = "route_invalid"    # 候选序号越界 / 该档位未开放
+R_NO_PATH = "no_path"                # 寻路失败（被屏障阻断）
+R_MARCH_BLOCKED = "march_blocked"    # 手动探路遇阻停下（硬阻挡 / 水域）
+R_DIRECTION_INVALID = "direction_invalid"
 
 
 @dataclass
@@ -163,6 +171,54 @@ def _accept(r: Result, text: str, data: dict = None) -> Result:
 def _loc_name(loc) -> str:
     """地点 id → 显示名。"""
     return ST.name_of(loc) if isinstance(loc, int) else str(loc)
+
+
+# ============ P4-T3 世界层辅助 ============
+# 八方向（与 worldmap._SLOPE_OFFS 同口径：正交 + 对角）
+MARCH_DIRS: dict = {
+    "东": (1, 0), "东北": (1, 1), "北": (0, 1), "西北": (-1, 1),
+    "西": (-1, 0), "西南": (-1, -1), "南": (0, -1), "东南": (1, -1),
+}
+# 旧地点（content/sites.py）在 `content/regions.LEGACY_ANCHORS` 里的名字
+_LEGACY_SITE_ANCHOR = {
+    ST.name_of(sid): sid for sid in [ST.SHISHI] + list(ST.SITES)
+}
+_PROFILE_LABELS = {"fastest": "最快", "safe": "最安全", "stealth": "最隐蔽"}
+
+
+def _pt_seg_dist2(px: float, py: float, ax: float, ay: float,
+                  bx: float, by: float) -> float:
+    """点到线段的**平方**距离（避免开方，只用于比较）。"""
+    dx = bx - ax
+    dy = by - ay
+    seg2 = dx * dx + dy * dy
+    if seg2 <= 0.0:
+        return (px - ax) ** 2 + (py - ay) ** 2
+    t = ((px - ax) * dx + (py - ay) * dy) / seg2
+    if t < 0.0:
+        t = 0.0
+    elif t > 1.0:
+        t = 1.0
+    cx = ax + t * dx
+    cy = ay + t * dy
+    return (px - cx) ** 2 + (py - cy) ** 2
+
+
+def _legacy_li(a: str, b: str) -> float:
+    """两个**旧地点**之间的里程（里，锚点欧氏距离）。
+
+    为什么需要它：`content/sites.py` 的 5 个旧地点有一条**固定连接**语义（互相可达），
+    而新世界是连续坐标——若每次旧地点互访都去跑世界寻路，就会为每次挪步付一次
+    世界生成（实测 ≈6 s），smoke 20 局直接跑不完。**这是 T3 的过渡桥**：
+    旧地点清单在 T5 被城镇设施取代后，函数与调用点一并删除。
+    """
+    ax, ay = R.LEGACY_ANCHORS.get(a, R.CORE_DOMAIN_CENTER)
+    bx, by = R.LEGACY_ANCHORS.get(b, R.CORE_DOMAIN_CENTER)
+    return math.hypot(bx - ax, by - ay)
+
+
+# 越野基线（里/日）：旧地点连接按"无路可循"估算，与定案 §4 「越野基线 22」一致
+_OFFROAD_LI_PER_DAY = 22.0
 
 
 def _as_int(v, default: int = 0) -> int:
@@ -422,7 +478,8 @@ class Game:
             )
             self.state = GameState.from_dict(load)
             self.rng.restore(self.state.rng_counter)
-            self._migrate_state(had_gongfa=had_gongfa, legacy_gongfa=legacy_gongfa)
+            self._migrate_state(had_gongfa=had_gongfa, legacy_gongfa=legacy_gongfa,
+                                had_world=("world" in load))
         else:
             self.state = GameState(seed=seed)
             self.state.player = _new_player(self.rng)
@@ -430,6 +487,12 @@ class Game:
                 self.state.player.name = name
             p = self.state.player
             p.spirit_stones = S.START_SPIRIT_STONES
+            # P4-T3：位置真相 = 世界坐标（坊市锚点）；地图档位：开局给粗舆图（定案 §5）。
+            # `Player.location` 是**标签**，开局显式置为坊市 id（不做坐标投影，避免建世界）。
+            self.state.world = WM.WorldState.legacy(
+                int(seed), location=ST.name_of(ST.SHISHI))
+            self._set_pos(*R.LEGACY_ANCHORS.get(ST.name_of(ST.SHISHI),
+                                                R.CORE_DOMAIN_CENTER))
             p.location = ST.SHISHI
             # 开局灵气 = 当前境界灵气池上限（否则所有技能都因 low_qi 放不出来）
             p.qi = float(BTL.battle_stats(p.realm_idx)["qi_max"])
@@ -445,9 +508,11 @@ class Game:
             )
         self._checkpoint = None  # 节点回溯快照
         self._active_battle = None  # 战斗会话（运行时状态，不入存档）
+        self._route_memo = {}    # (起点,终点,档位,境界,舆图档) → 候选路径（纯缓存，不入存档）
 
     # ---------- 旧档迁移 ----------
-    def _migrate_state(self, had_gongfa: bool = False, legacy_gongfa: bool = False):
+    def _migrate_state(self, had_gongfa: bool = False, legacy_gongfa: bool = False,
+                       had_world: bool = False):
         """兼容旧存档：背包键/地点可能存中文名或字符串数字 → 统一为 int id。
 
         had_gongfa=False 表示存档原文没有 main_gongfa 字段（旧版）。
@@ -478,6 +543,13 @@ class Game:
             p.location = lid if lid is not None else ST.SHISHI
         elif p.location is None:
             p.location = ST.SHISHI
+        # P4-T3 世界层迁移：
+        #   ① 存档带 `world` 键 → 坐标为真相；`Player.location` 标签保留存档里的值
+        #      （**不做投影**——投影要遍历城镇列表，会触发世界生成，读档不该付这个成本）；
+        #   ② 老档（P4-T3 之前无 `world` 键）→ 按旧地点名映射到锚点（WorldState.legacy）。
+        if not (had_world and self.state.world.world_seed):
+            self.state.world = WM.WorldState.legacy(
+                int(self.seed), location=ST.name_of(p.location))
         # 功法栏（P3）：旧档无新字段 → 主修迁入领悟池 / 无主修补吐纳诀
         if legacy_gongfa:
             old_main = p.main_gongfa
@@ -604,7 +676,11 @@ class Game:
         elif action == "age_pass":
             r = self._age_pass(_as_int(kw.get("days", 30), 30))
         elif action == "travel":
-            r = self._travel(str(kw.get("site", "")))
+            r = self._travel(str(kw.get("site", "")),
+                             route=kw.get("route", None),
+                             profile=(str(kw.get("profile", "")) or None))
+        elif action == "march":
+            r = self._march(str(kw.get("direction", "") or kw.get("dir", "")))
         elif action == "explore":
             r = self._explore(str(kw.get("site", "")))
         elif action == "buy":
@@ -648,21 +724,326 @@ class Game:
         return r
 
     # ---------- 移动/探索/交易 ----------
-    def _travel(self, site_input: str) -> Result:
-        """前往地点（坊市或探索点）。"""
+    # ===== P4-T3：世界层（连续坐标 + 代价场寻路 + 手动探路）=====
+    @property
+    def wmap(self) -> "WM.WorldMap":
+        """本局世界（同 seed 复用；地形/路网/城镇均为纯函数重建）。
+
+        ⚠️ 首次访问会**触发世界生成（实测 ≈6 s）**，故只在真正需要坐标/寻路时才碰它
+        （如"同镇内移动"就走 `NEAR_MOVE_*` 快捷路径，不建世界）。
+        """
+        return WM.WorldMap.get(int(self.state.world.world_seed or self.seed))
+
+    def pos(self) -> tuple:
+        """玩家当前世界坐标（里）。"""
+        return (float(self.state.world.pos[0]), float(self.state.world.pos[1]))
+
+    def _set_pos(self, x: float, y: float):
+        """写回世界坐标（**不动 `Player.location`**，避免为此触发世界生成）。"""
+        self.state.world = self.state.world.with_pos(float(x), float(y))
+
+    def at_market(self) -> bool:
+        """是否身处坊市（按**到坊市锚点的距离**判定，不依赖世界生成）。
+
+        P3.9 起 `market` 与 `buy` 共用此门槛；T3 把它从"地点 id 相等"改为"坐标距离"，
+        因为城内设施坐标是同一世界坐标的小数部分（定案 §6.1）——整座青石镇都算坊市范围。
+        """
+        x, y = self.pos()
+        ax, ay = R.LEGACY_ANCHORS.get(ST.name_of(ST.SHISHI), R.CORE_DOMAIN_CENTER)
+        return math.hypot(ax - x, ay - y) <= S.MARKET_RADIUS_LI
+
+    def _near_town(self, x: float, y: float):
+        """坐标落在哪个城镇的影响半径内（无则 None）。**会触发世界生成**。"""
+        wmap = self.wmap
+        for t in wmap.towns:
+            if math.hypot(t.x - x, t.y - y) <= wmap.town_radius(t):
+                return t
+        return None
+
+    def _town_at_or_nearest(self, x: float, y: float):
+        """先判"在不在镇内"，否则退到最近城镇（用于位置标签）。"""
+        t = self._near_town(x, y)
+        if t is not None:
+            return t
+        best = None
+        best_d = float("inf")
+        for tw in self.wmap.towns:
+            d = (tw.x - x) ** 2 + (tw.y - y) ** 2
+            if d < best_d:
+                best_d = d
+                best = tw
+        return best
+
+    def _site_of_pos(self, x: float, y: float) -> int:
+        """世界坐标 → 旧地点 id（`Player.location` 的兼容投影）。
+
+        规则（`Player.location` 只是**标签**，位置真相在 `WorldState.pos`）：
+        ① 落在旧地点锚点附近（≤60 里）→ 该旧地点 id；
+        ② 否则落在**核心域主城**（坊市锚点所在城镇）内 → 坊市（交易面板依赖此 id）；
+        ③ 其余 → 最近的旧探索点（仅供显示与旧测试兼容）。
+        """
+        for name, sid in _LEGACY_SITE_ANCHOR.items():
+            ax, ay = R.LEGACY_ANCHORS.get(name, (x, y))
+            if math.hypot(ax - x, ay - y) <= 60.0:
+                return sid
+        t = self._town_at_or_nearest(x, y)
+        if t is not None and getattr(t, "is_main", False):
+            mx, my = R.LEGACY_ANCHORS.get(ST.name_of(ST.SHISHI), (t.x, t.y))
+            if math.hypot(mx - t.x, my - t.y) <= 80.0 + self.wmap.town_radius(t):
+                return ST.SHISHI
+        # 兜底：最近的旧探索点（保持 int id，前端契约不变）
+        best_sid = ST.SHISHI
+        best_d = float("inf")
+        for name, sid in _LEGACY_SITE_ANCHOR.items():
+            ax, ay = R.LEGACY_ANCHORS.get(name, (x, y))
+            dd = (ax - x) ** 2 + (ay - y) ** 2
+            if dd < best_d:
+                best_d = dd
+                best_sid = sid
+        return best_sid
+
+    def _sync_location(self):
+        """把世界坐标投影成 `Player.location`（旧地点 id）。
+
+        方向：`WorldState.pos` 是**位置真相**；`Player.location` 是**派生标签**
+        （前端契约 / smoke / 旧测试都用它，故保持 int id 不变）。
+        """
+        self.state.player.location = self._site_of_pos(*self.pos())
+
+    def _place_label(self, x: float, y: float) -> str:
+        """坐标 → 显示名（城镇名优先，否则"野外"）。"""
+        t = self._near_town(x, y)
+        if t is not None:
+            return t.name
+        return "野外"
+
+    def _dest_pos(self, dest: str):
+        """目的地输入 → (名字, x, y)；支持旧地点名与城镇名/id。找不到返回 None。"""
+        name = str(dest or "").strip()
+        if not name:
+            return None
+        sid = ST.resolve(name)
+        if sid is not None:
+            lname = ST.name_of(sid)
+            ax, ay = R.LEGACY_ANCHORS.get(lname, R.CORE_DOMAIN_CENTER)
+            return (lname, float(ax), float(ay))
+        t = self.wmap.town_by_id(name) if name.startswith("town_") else None
+        if t is None:
+            for tw in self.wmap.towns:
+                if tw.name == name:
+                    t = tw
+                    break
+        if t is None:
+            return None
+        return (t.name, float(t.x), float(t.y))
+
+    def _plan_routes(self, dest: str, profile: str = None, limit: int = 1):
+        """规划候选路径（纯查询，不动状态）：返回 (目的地 tuple, [route dict…])。
+
+        带一层**实例内 memo**：同一 (起点, 终点, 档位, 境界, 舆图档) 只算一次。
+        没有它时每次查询都是"建窗口代价场 + A*"（实测单次 0.1~1.2 s，首次还要叠
+        世界生成 ≈6 s），而 bot / 前端会反复查同一对起终点。
+        """
+        d = self._dest_pos(dest)
+        if d is None:
+            return None, []
+        name, gx, gy = d
+        x, y = self.pos()
+        realm = self.state.player.realm_idx
+        profiles = list(S.TRAVEL_PROFILES[:limit])
+        if profile:
+            profiles = [profile if profile in S.TRAVEL_PROFILES else "fastest"]
+        mkey = (round(x, 3), round(y, 3), round(gx, 3), round(gy, 3),
+                tuple(profiles), int(realm), self.state.world.map_level)
+        hit = self._route_memo.get(mkey)
+        if hit is not None:
+            return (name, gx, gy), hit
+        out = []
+        tid_by_name = {t.name: i for i, t in R.TERRAINS.items()}
+        for idx, prof in enumerate(profiles):
+            res = self.wmap.find_path((x, y), (gx, gy), profile=prof, realm_idx=realm)
+            if res.blocked:
+                continue
+            road = sum(v for k, v in res.terrain_mix.items() if k in ("官道", "小径"))
+            danger = sum(v for k, v in res.terrain_mix.items()
+                         if tid_by_name.get(k) is not None
+                         and R.TERRAINS[tid_by_name[k]].danger >= 0.5)
+            out.append({
+                "idx": idx, "profile": prof, "label": _PROFILE_LABELS.get(prof, prof),
+                "si": int(res.total_si), "days": round(res.total_si / S.SI_PER_DAY, 1),
+                "li": round(res.total_li, 1),
+                "terrain_mix": {k: round(v, 4) for k, v in res.terrain_mix.items()},
+                "road_share": round(road, 4), "danger_share": round(danger, 4),
+                "dest": {"name": name, "x": gx, "y": gy},
+            })
+        if len(self._route_memo) >= 64:
+            self._route_memo.clear()
+        self._route_memo[mkey] = out
+        return (name, gx, gy), out
+
+    def _travel(self, dest_input: str, route=None, profile: str = None) -> Result:
+        """前往地点：**两段式**（定案 §4.2）。
+
+        - 不带 `route`：只给候选路径（不推进时间、不移动）——无舆图则拒（`need_map`）。
+        - 带 `route`：执行选中候选，按路径 `total_si` 推进真实时间。
+
+        近距（≤ `NEAR_MOVE_LI`，如坊市 ↔ 同镇的灵脉山）走快捷语义：同一聚落内挪动，
+        **不建世界、不做寻路**——否则每次挪步都要付一次世界生成（实测 ≈6 s）。
+        """
         r = Result()
         p = self.state.player
-        site = ST.resolve(site_input.strip())
-        if site is None:
+        d = self._dest_pos(dest_input)
+        if d is None:
             names = "、".join([ST.name_of(i) for i in [ST.SHISHI] + list(ST.SITES)])
-            return _reject(r, R_SITE_INVALID, f"无此地名。可去：{names}")
-        if p.location == site:
-            return _reject(r, R_ALREADY_THERE, f"你已在【{_loc_name(site)}】。")
-        self._advance_days(S.TRAVEL_DAYS)
-        p.location = site
-        return _accept(r, f"赶路{S.TRAVEL_DAYS}日，抵达【{_loc_name(site)}】。",
-                       {"site_id": site, "site_name": _loc_name(site),
-                        "days": S.TRAVEL_DAYS})
+            return _reject(r, R_SITE_INVALID,
+                           f"无此地名。可去：{names}；或已探索的城镇名。")
+        name, gx, gy = d
+        x, y = self.pos()
+        dist = math.hypot(gx - x, gy - y)
+        # 旧地点之间（含同聚落）：走固定连接语义，**不建世界**（见 _legacy_li 注释）
+        cur_site = ST.resolve(_loc_name(self.state.player.location))
+        tgt_site = ST.resolve(name)
+        if cur_site is not None and tgt_site is not None:
+            li = _legacy_li(_loc_name(cur_site), _loc_name(tgt_site))
+            si = int(math.ceil(li / _OFFROAD_LI_PER_DAY * S.SI_PER_DAY)) if li > 0 else 0
+            if si > 0:
+                self._advance_si(si)
+            self._set_pos(gx, gy)
+            self.state.player.location = tgt_site
+            r.data = {"planned": False, "near": True, "legacy_move": True,
+                      "dest": {"name": name, "x": gx, "y": gy}, "li": round(li, 1),
+                      "si": si, "days": round(si / S.SI_PER_DAY, 1), "pos": [gx, gy],
+                      "location": {"id": tgt_site, "name": _loc_name(tgt_site)}}
+            r.text = (f"赶路{round(si / S.SI_PER_DAY, 1)}日，抵达【{name}】。"
+                      if si else f"你已在【{name}】。")
+            return _accept(r, r.text, r.data)
+        if dist <= S.NEAR_MOVE_LI:
+            self._advance_days(S.NEAR_MOVE_DAYS)
+            self._set_pos(gx, gy)
+            r.data = {"planned": False, "near": True,
+                      "dest": {"name": name, "x": gx, "y": gy},
+                      "days": S.NEAR_MOVE_DAYS, "si": int(S.NEAR_MOVE_DAYS * S.SI_PER_DAY),
+                      "pos": [gx, gy],
+                      "location": {"id": p.location, "name": _loc_name(p.location)}}
+            r.text = f"在聚落内辗转半日，抵达【{name}】。"
+            return _accept(r, r.text, r.data)
+        if self.state.world.map_level == "none":
+            return _reject(r, R_NEED_MAP,
+                           "你手中无舆图，不知路在何方。只能按方向摸索着走"
+                           "（march <东/东北/…>）。")
+        dest, routes = self._plan_routes(dest_input, profile=profile,
+                                         limit=self._route_limit())
+        if dest is None:
+            return _reject(r, R_SITE_INVALID, "无此地名。")
+        if not routes:
+            return _reject(r, R_NO_PATH,
+                           f"以你如今修为，从【{self._place_label(x, y)}】到【{name}】"
+                           f"无路可通（绝壁 / 深海 / 禁制所阻）。")
+        if route is None:
+            r.ok = True
+            r.reason = R_OK
+            r.data = {"planned": True, "dest": {"name": name, "x": gx, "y": gy},
+                      "routes": routes, "map_level": self.state.world.map_level}
+            r.text = self._routes_text(name, routes)
+            return r
+        idx = _as_int(route, -1)
+        pick = next((q for q in routes if q["idx"] == idx), None)
+        if pick is None:
+            return _reject(r, R_ROUTE_INVALID,
+                           f"候选序号 {idx} 无效（可选："
+                           f"{'、'.join(str(q['idx']) for q in routes)}）。")
+        self._advance_si(pick["si"])
+        self._set_pos(gx, gy)
+        self._sync_location()
+        r.data = {"planned": False, "dest": {"name": name, "x": gx, "y": gy},
+                  "route": pick, "si": pick["si"], "days": pick["days"],
+                  "li": pick["li"], "pos": [gx, gy],
+                  "location": {"id": p.location, "name": _loc_name(p.location)}}
+        r.text = (f"沿【{pick['label']}】一路而行，{pick['days']} 日"
+                  f"（{pick['li']:.0f} 里）抵达【{name}】。")
+        self.state.chronicle.add(p.age_years, f"自别处动身，{pick['days']} 日后抵【{name}】。")
+        return _accept(r, r.text, r.data)
+
+    def _route_limit(self) -> int:
+        """按舆图档位决定给几条候选（定案 §5：无舆图 / 粗舆图 / 详图）。"""
+        lvl = self.state.world.map_level
+        if lvl == "detailed":
+            return len(S.TRAVEL_PROFILES)
+        return 1
+
+    def _routes_text(self, name: str, routes: list) -> str:
+        lines = [f"往【{name}】的路数条，各有取舍："]
+        for q in routes:
+            lines.append(
+                "  [%d] %s：%s 日 / %.0f 里（路网 %.0f%%、险地 %.0f%%）"
+                % (q["idx"], q["label"], q["days"], q["li"],
+                   q["road_share"] * 100, q["danger_share"] * 100))
+        lines.append("选定后 travel <地名> route=<序号>。")
+        return "\n".join(lines)
+
+    def _march(self, direction: str) -> Result:
+        """手动探路（无舆图）：沿指定方向直线推进，**遇硬阻挡 / 水域停下问玩家**。
+
+        定案 §4.2：不自动寻路、不绕行——玩家自己承担绕行代价，也不额外掷骰惩罚。
+        """
+        r = Result()
+        p = self.state.player
+        d = MARCH_DIRS.get(str(direction or "").strip())
+        if d is None:
+            return _reject(r, R_DIRECTION_INVALID,
+                           "方向不明。可用：" + "、".join(MARCH_DIRS.keys()))
+        wmap = self.wmap
+        step_li = S.WORLD_CELL_LI
+        sx, sy = self.pos()
+        cx, cy = WM.cell_of(sx, sy)
+        # 直线经过的格（Bresenham），跳过起点格
+        cells = WM._line_cells((cx, cy), (cx + d[0] * 64, cy + d[1] * 64))[1:]
+        diag = (d[0] != 0 and d[1] != 0)
+        seg_li = step_li * (math.sqrt(2.0) if diag else 1.0)
+        travelled = 0.0
+        si = 0.0
+        blocked = None
+        realm = p.realm_idx
+        for (ncx, ncy) in cells:
+            if ncx < 0 or ncy < 0 or ncx > WM._N - 1 or ncy > WM._N - 1:
+                blocked = "世界边界"
+                break
+            tid = wmap._terrain_cell(ncx, ncy, True)
+            sp = wmap._sample_speed("fastest", tid, realm, 0.0)[0]
+            if sp <= 0.0:
+                # 硬阻挡 / 不可渡水域：停下来让玩家决定方向（**不自动绕行**，定案 §4.2）
+                blocked = R.TERRAINS[tid].name
+                break
+            travelled += seg_li
+            si += seg_li / sp * S.SI_PER_DAY
+            if travelled >= S.MARCH_MAX_LI:
+                break
+        if travelled <= 0.0:
+            blocked = blocked or "原地不动"
+        # 落位：沿方向推进实际里程（保持连续坐标语义）
+        along = math.hypot(d[0], d[1])
+        nx = sx + d[0] / along * travelled
+        ny = sy + d[1] / along * travelled
+        nx, ny = WM.clamp_xy(nx, ny)
+        if travelled > 0.0:
+            self._advance_si(int(math.ceil(si)))
+            self._set_pos(nx, ny)
+        label = self._place_label(nx, ny)
+        if blocked:
+            r.reason = R_MARCH_BLOCKED
+            r.ok = False
+            r.text = (f"你向【{direction}】摸索 {travelled:.0f} 里"
+                      f"（{int(math.ceil(si))} 息），前路被【{blocked}】挡住，只得停步。")
+        else:
+            r.ok = True
+            r.reason = R_OK
+            r.text = (f"你向【{direction}】摸索 {travelled:.0f} 里"
+                      f"（{int(math.ceil(si))} 息），现处【{label}】。")
+        r.data = {"direction": direction, "li": round(travelled, 1),
+                  "si": int(math.ceil(si)), "blocked": bool(blocked),
+                  "blocked_by": blocked or "", "pos": [nx, ny],
+                  "place": label, "map_level": self.state.world.map_level}
+        return r
 
     def _explore(self, site_input: str) -> Result:
         """在指定探索点探索一次（耗时 days_cost，可能遇险/得宝/遇敌）。"""
@@ -676,13 +1057,23 @@ class Game:
         site_name = cfg.name
         # 境界门槛：不足则危险翻倍、心魔+5
         underlevel = p.realm_idx < cfg.realm_req
-        # 先移动到该处
+        # 先移动到该处（P4-T3：按真实路径耗时结算，不再是固定 3 日）。
+        # 走 `_travel` 而不是直接 `_plan_routes`：旧地点之间有固定连接语义，
+        # 由 `_travel` 判定并走"不建世界"的快捷路径；只有**真实城镇**才需要寻路。
+        move_txt = ""
         if p.location != site:
-            self._advance_days(S.TRAVEL_DAYS)
-            p.location = site
-            move_txt = f"赶路{S.TRAVEL_DAYS}日抵达【{site_name}】。"
-        else:
-            move_txt = ""
+            mv = self._travel(site_name)
+            if mv.ok:
+                days = mv.data.get("days", 0)
+                if mv.data.get("legacy_move"):
+                    move_txt = f"赶路{days}日，抵达【{site_name}】。"
+                elif mv.data.get("near"):
+                    move_txt = f"在聚落内辗转，抵达【{site_name}】。"
+                else:
+                    move_txt = (f"赶路{days}日（{mv.data.get('li', 0):.0f} 里）"
+                                f"抵达【{site_name}】。")
+            else:
+                return _reject(r, mv.reason, mv.text)
         self._advance_days(cfg.days_cost)
         lo, hi = cfg.stone
         gain = self.rng.randint(lo, hi, f"explore_stone_{site}")
@@ -736,13 +1127,14 @@ class Game:
         """坊市货单（须身处坊市）。
 
         P3.9：货单与购买的地点门槛统一——此前 market 在任何地点都能看到全部货单，
-        而 buy 却要求身处坊市，信息面与交易面不一致。现在两者都要求 p.location == 坊市。
+        而 buy 却要求身处坊市，信息面与交易面不一致。现在两者都要求身处坊市。
+        T3：门槛由"地点 id 相等"改为 `at_market()`（到坊市锚点的距离）。
         """
         r = Result()
         p = self.state.player
-        if p.location != ST.SHISHI:
+        if not self.at_market():
             return _reject(r, R_NOT_AT_MARKET,
-                           f"此处并非坊市（当前在【{_loc_name(p.location)}】），"
+                           f"此处并非坊市（当前在【{self._place_label(*self.pos())}】），"
                            f"看不到货单。前往坊市：travel 坊市。")
         return _accept(r, self._market_text(), self._market_data())
 
@@ -800,7 +1192,7 @@ class Game:
     def _buy(self, item_input: str, qty: int) -> Result:
         r = Result()
         p = self.state.player
-        if p.location != ST.SHISHI:
+        if not self.at_market():
             return _reject(r, R_NOT_AT_MARKET, "须先前往【坊市】方能购买（travel 坊市）。")
         qty = max(1, min(qty, 99))
         # 丹药优先，其次功法（名字不冲突时互不影响）
@@ -1638,7 +2030,9 @@ class Game:
             "lifespan_left": p.lifespan_left_years(),
             "heart_demon": p.heart_demon, "karma": p.karma, "alive": p.alive,
             "spirit_stones": p.spirit_stones,
-            "location": {"id": p.location, "name": _loc_name(p.location)},
+            "location": {"id": p.location, "name": _loc_name(p.location),
+                         "x": self.pos()[0], "y": self.pos()[1],
+                         "map_level": self.state.world.map_level},
             "inventory": [{"id": pid, "name": P.name_of(pid), "qty": qty}
                           for pid, qty in p.inventory.items()],
             "pool": {

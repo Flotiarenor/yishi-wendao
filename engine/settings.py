@@ -153,7 +153,16 @@ def format_time(t: int) -> str:
 
 # ---------- 灵石与经济 ----------
 START_SPIRIT_STONES = 50          # 开局灵石
-TRAVEL_DAYS = 3                   # ⚠️ 废弃中：P4-T3 改为按距离 × 地形算息（保留仅为旧档/旧测试兼容）
+# ⚠️ TRAVEL_DAYS 已**退役**（P4-T3）：移动耗时改按路径积分真实结算（`PathResult.total_si`）。
+# 常量仅保留给"无舆图手动探路"的单步上限之外的旧调用点兼容，**移动逻辑不得再读它**。
+TRAVEL_DAYS = 3
+
+# ---------- 移动（P4-T3，定案 §4）----------
+MARCH_MAX_LI = 300.0              # 手动探路单次推进上限（里）：≈ 越野 14 日 / 沿路 7 日
+TRAVEL_PROFILES = ("fastest", "safe", "stealth")   # 候选路径档位（详图给全 3 档，粗舆图只给首个）
+NEAR_MOVE_LI = 60.0               # 近距移动阈值（里）：同一聚落内挪动不走世界寻路
+NEAR_MOVE_DAYS = 0.5              # 近距移动耗时（日）——同一聚落内挪动，**不建世界**
+MARKET_RADIUS_LI = 120.0          # 坊市判定半径（里）：距坊市锚点在此内即算"身处坊市"
 
 # 小境界突破耗灵石 = 基准 + 档号系数（随境界上涨，防止无脑冲）
 BREAKTHROUGH_STONE_COST = 10

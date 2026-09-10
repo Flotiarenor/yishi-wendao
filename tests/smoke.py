@@ -212,7 +212,7 @@ def _gongfa_tick(g, turns: int) -> bool:
         return True
     # 3) 未拥有候选：坊市且买得起 → 购得入领悟池（下回合走 2 参悟换装）
     cand = _main_cand(p)
-    if cand is not None and p.location == ST.SHISHI and p.spirit_stones >= cand.price + 40:
+    if cand is not None and g.at_market() and p.spirit_stones >= cand.price + 40:
         g.step("buy", item=str(cand.id), qty=1)
         return True
     # 4) 主修技能参悟：修为未满时隔周期把部分闭关日数投参悟主修，
@@ -252,7 +252,7 @@ def play_game(seed: int, max_turns: int = 20000, verbose: bool = False,
             break
         # 2) 心魔过重先清心
         if p.heart_demon > 50:
-            if p.location != ST.SHISHI:
+            if not g.at_market():
                 g.step("travel", site=str(ST.SHISHI))
             if _q(p, P.QINGXIN) == 0 and p.spirit_stones >= P.by_id(P.QINGXIN).price:
                 g.step("buy", item=str(P.QINGXIN), qty=1)
@@ -269,7 +269,7 @@ def play_game(seed: int, max_turns: int = 20000, verbose: bool = False,
             turns += 1
             continue
         cand = _main_cand(p)
-        if cand is not None and p.location != ST.SHISHI \
+        if cand is not None and not g.at_market() \
                 and p.spirit_stones >= cand.price + 80:
             g.step("travel", site=str(ST.SHISHI))
             if verbose:
@@ -295,7 +295,7 @@ def play_game(seed: int, max_turns: int = 20000, verbose: bool = False,
                     site = _pick_site(p)
                     g.step("explore", site=str(site))
                     continue
-                if p.location != ST.SHISHI:
+                if not g.at_market():
                     g.step("travel", site=str(ST.SHISHI))
                 if p.spirit_stones >= P.by_id(pid).price:
                     g.step("buy", item=str(pid), qty=1)

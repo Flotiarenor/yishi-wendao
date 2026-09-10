@@ -379,6 +379,17 @@ def center_of(cx: int, cy: int) -> tuple:
     return ((cx + 0.5) * _CELL_LI, (cy + 0.5) * _CELL_LI)
 
 
+@functools.lru_cache(maxsize=8192)
+def _town_radius_cached(seed: int, cx: int, cy: int) -> float:
+    """`_town_radius` 的纯函数缓存。
+
+    城镇影响半径在生成期与查询期都会被算到（"这个坐标在不在某镇内"要遍历全部城镇），
+    每次重算都要走 `hash01`；生成完的世界里 `(seed, cx, cy) → 半径` 是**纯函数**，
+    故直接缓存（无状态、跨实例安全）。
+    """
+    return _town_radius(seed, cx, cy)
+
+
 def _town_radius(seed: int, cx: int, cy: int) -> float:
     """城镇影响半径（里）——**可变**：200~620 里，偏小分布。
 
@@ -667,6 +678,7 @@ class WorldMap:
         self._rivers = None          # tuple[River, ...]
         self._river_cells = None     # frozenset[int] 河格（含渡口格）
         self._towns = None           # tuple[Town, ...]
+        self._town_rl = ()           # tuple[float, ...]：与 `_towns` 同序的影响半径
         self._roads = None           # tuple[Road, ...]
         self._points = None          # tuple[ContentPoint, ...]
         self._town_cells = {}        # idx → T_ROAD（城镇覆盖层）
@@ -1307,6 +1319,7 @@ class WorldMap:
         base = self._base
         elev = self._elev
         towns = []
+        _rl = []            # 与 towns 同序的影响半径缓存（见 town_radius 注释）
         # 主城名先占位，保证随机命名不会抢走「青石镇」
         used_names = {_MAIN_TOWN: True}
         _acx, _acy = cell_of(R.LEGACY_ANCHORS["坊市"][0], R.LEGACY_ANCHORS["坊市"][1])
@@ -1407,7 +1420,11 @@ class WorldMap:
                 main = is_anchor if d == R.CORE_DOMAIN_IDX else (k == 0)
                 towns.append(Town(id="town_" + name, name=name, x=float(x), y=float(y),
                                   domain_idx=d, tier=dom.tier, is_main=bool(main)))
+                # 影响半径与 `towns` **同序**缓存：位置查询（"这坐标在不在某镇内"）要遍历
+                # 全部城镇，若每次重算半径会变成状态快照里的热点（实测首访 3.8 s）。
+                _rl.append(_town_radius(seed, cx, cy))
         self._towns = _FeatureTuple(towns)
+        self._town_rl = tuple(_rl)
 
     # ---------- 步骤 5：路网 ----------
     def _plan_field(self, profile: str = "road_plan") -> CostField:
@@ -1738,6 +1755,24 @@ class WorldMap:
             if t.id == town_id:
                 return t
         return None
+
+    def town_radius(self, town) -> float:
+        """城镇影响半径（里）——与生成期同口径，**生成期已算好存入 `_town_rl`**。
+
+        半径在生成时是**可变**的（200~620 里），故不写进 `Town` 字段，而在 `_ensure_towns()`
+        时按镇序缓存（`_town_rl` 与 `_towns` 同序）。`town` 可传 `Town` 实例或坐标 tuple。
+        """
+        self._ensure_towns()
+        if not isinstance(town, (tuple, list)):
+            seq = self._town_rl
+            if seq:
+                for i, t in enumerate(self._towns):
+                    if t is town or t.id == getattr(town, "id", None):
+                        return seq[i]
+            cx, cy = cell_of(float(town.x), float(town.y))
+        else:
+            cx, cy = cell_of(float(town[0]), float(town[1]))
+        return _town_radius_cached(self.world_seed, cx, cy)
 
     def point_by_id(self, point_id: str):
         """按 id 取内容点；找不到返回 None。"""

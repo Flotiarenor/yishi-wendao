@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, asdict, fields
 from typing import Optional
 
 import engine.settings as S
+from engine.worldmap import WorldState
 
 # 心魔值 0-100
 # 功德/业力：正=功德 负=业力
@@ -110,6 +111,9 @@ class GameState:
     player: Player = field(default_factory=Player)
     chronicle: Chronicle = field(default_factory=Chronicle)
     turn: int = 0                      # 玩家操作次数
+    # P4-T3：世界层状态（**只存差异**：`world_seed` + 位置 + 已发现点 + 舆图档）。
+    # 地形 / 路网 / 城镇 / 内容点全部由 `world_seed` 纯函数重建，不入存档（定案 §7）。
+    world: WorldState = field(default_factory=WorldState)
 
     @property
     def day(self) -> int:
@@ -128,6 +132,7 @@ class GameState:
             "player": self.player.to_dict(),
             "chronicle": self.chronicle.to_dict(),
             "turn": self.turn,
+            "world": self.world.to_dict(),   # P4-T3：恰 6 键（world_seed/pos/discovered/places/world_diff/map_level）
         }
 
     @classmethod
@@ -140,4 +145,8 @@ class GameState:
         gs.player = Player.from_dict(d["player"])
         gs.chronicle = Chronicle.from_dict(d["chronicle"])
         gs.turn = d.get("turn", 0)
+        # P4-T3 旧档迁移：既无 `world` 键又无位置信息的存档，由 Game 层按旧地点名补锚点
+        # （WorldState.legacy）。这里只负责"键存在就还原"，缺键留默认值。
+        if "world" in d:
+            gs.world = WorldState.from_dict(d["world"])
         return gs
