@@ -15,6 +15,36 @@
 from dataclasses import dataclass, field
 
 
+# 设施要素：**一块连通的同类格子 = 一个设施**（占地 3×3 也只算一处）。
+# 语义：玩家站在其中任意一格 → "身处该设施"；面板只有一个，不按格重复开。
+FACILITY_CHARS: dict = {
+    "M": "坊市", "I": "客栈", "L": "藏经阁", "R": "静室", "p": "广场", "G": "城门",
+}
+# 作为"建筑/设施"参与连通判定的字符（城墙 `=`、道路 `+` 不算设施）
+_FACILITY_SET = frozenset(FACILITY_CHARS)
+_NEIGH4 = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+
+@dataclass(frozen=True)
+class Facility:
+    """城内一处设施（由连通的同类格子合并而成）。
+
+    - `cells` = 占用的格子（可能很多格，甚至 3×3）；
+    - `x`/`y` = **代表点**（取格心均值，用于导航与显示）；
+    - `on_road` = 是否有格子在道路两格内（体检项：走不到 = 假设施）。
+    """
+    kind: str                 # M/I/L/R/p/G
+    name: str                 # 坊市 / 客栈 / …
+    cells: tuple              # ((x, y), …)
+    x: float
+    y: float
+    on_road: bool = True
+
+    @property
+    def size(self) -> int:
+        return len(self.cells)
+
+
 @dataclass(frozen=True)
 class TownLayout:
     """一份城镇布局模板。"""
@@ -55,8 +85,8 @@ class TownLayout:
         ch = row[x]
         return "" if ch == " " else ch
 
-    def facilities(self, ch: str) -> list:
-        """某类设施的坐标表 `[(x, y), …]`（ch 取 M/I/L/R/p）。"""
+    def cells_of(self, ch: str) -> list:
+        """某字符的**全部格子** `[(x, y), …]`（3×3 坊市会返回 9 格）。"""
         out = []
         for y, row in enumerate(self.rows):
             for x, c in enumerate(row):
@@ -64,12 +94,66 @@ class TownLayout:
                     out.append((x, y))
         return out
 
+    def facilities(self, kind: str = None) -> tuple:
+        """识别设施：**把连通的同类格子合成一处**（3×3 坊市 = 1 个 Facilities，不是 9 个）。
+
+        判定规则：4 邻接同字符 → 同一设施（对角相邻不算连通，避免两个斜角的坊市被并成一个）。
+        `kind=None` 时返回全部设施，按 (kind, y, x) 排序，保证确定性。
+        """
+        kinds = [kind] if kind else sorted(_FACILITY_SET)
+        is_road = [[self.tile_at(x, y) == "+" for x in range(self.w)] for y in range(self.h)]
+        out = []
+        for k in kinds:
+            seen = [[False] * self.w for _ in range(self.h)]
+            for y, row in enumerate(self.rows):
+                for x, c in enumerate(row):
+                    if c != k or seen[y][x]:
+                        continue
+                    # 洪泛取连通块
+                    stack, cells = [(x, y)], []
+                    seen[y][x] = True
+                    while stack:
+                        cx, cy = stack.pop()
+                        cells.append((cx, cy))
+                        for dx, dy in _NEIGH4:
+                            nx, ny = cx + dx, cy + dy
+                            if 0 <= nx < self.w and 0 <= ny < self.h \
+                                    and not seen[ny][nx] and self.tile_at(nx, ny) == k:
+                                seen[ny][nx] = True
+                                stack.append((nx, ny))
+                    # 是否有格子在道路 2 格内（否则玩家走不到）
+                    near = False
+                    for cx, cy in cells:
+                        for r in range(1, 3):
+                            for dx, dy in ((r, 0), (-r, 0), (0, r), (0, -r)):
+                                nx, ny = cx + dx, cy + dy
+                                if 0 <= nx < self.w and 0 <= ny < self.h and is_road[ny][nx]:
+                                    near = True
+                    out.append(Facility(
+                        kind=k, name=FACILITY_CHARS[k], cells=tuple(sorted(cells)),
+                        x=round(sum(c[0] for c in cells) / len(cells) + 0.5, 2),
+                        y=round(sum(c[1] for c in cells) / len(cells) + 0.5, 2),
+                        on_road=near))
+        out.sort(key=lambda f: (f.kind, f.y, f.x))
+        return tuple(out)
+
+    def facility_at(self, x: int, y: int):
+        """某格属于哪个设施（不属于任何设施返回 None）——用于"你站在坊市了吗"。"""
+        ch = self.tile_at(x, y)
+        if ch not in _FACILITY_SET:
+            return None
+        for f in self.facilities(ch):
+            if (x, y) in f.cells:
+                return f
+        return None
+
     def stats(self) -> dict:
         from collections import Counter
         t = Counter("".join(self.rows))
         z = Counter("".join(self.zone_rows)) if self.zone_rows else Counter()
         z.pop(" ", None)
-        return {"tiles": dict(t), "zones": dict(z)}
+        fac = Counter(f.name for f in self.facilities())
+        return {"tiles": dict(t), "zones": dict(z), "facilities": dict(fac)}
 
 
 def _parse_legend(items) -> dict:
