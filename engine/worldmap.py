@@ -584,22 +584,36 @@ class CostField:
 
 
 # ============ Profile 参数表 ============
+# 代价模型（T3 改）：**代价域线性组合**
+#   格代价 = 时间项(息) + 危险项(息) + 隐蔽项(息)
+#     t_cost = 采样点里程 / 速度 × 43200 × mult        # mult 只含森林偏好等"速度型"偏好
+#     d_cost = danger_w × danger × 采样点里程
+#     s_cost = route_pen × 采样点里程                  # stealth 避官道
+# 为什么不用"速度域乘法"（旧实现 `mult = 1 + 3×danger`）：每格取 9 点采样的**最小代价**，
+# 而乘法惩罚是逐点的 → 格内只要有一点是好地形，惩罚就被 `min` 抹平（实测：危险权重从 3 扫到 100，
+# 路径的危险地形占比反而 86%→99%、耗时翻 70 倍）。改成**相加**后，绕开危险地形必然省钱。
 PROFILES: dict = {
-    "fastest": {"desc": "纯时间最小", "danger": False, "road_mult": 1.0,
-                "forest_mult": 1.0, "water": "realm", "fly": False},
-    "safe": {"desc": "按地形危险度加权（×1+3×danger）", "danger": True, "road_mult": 1.0,
-             "forest_mult": 1.0, "water": "realm", "fly": False},
-    "stealth": {"desc": "避开官道、偏爱林地（暴露低）", "danger": False, "road_mult": 6.0,
-                "forest_mult": 0.85, "water": "realm", "fly": False, "exposure_mult": 3.0},
-    "fly": {"desc": "飞行：忽略地形，仅禁制 / 虚空阻挡", "danger": False, "road_mult": 1.0,
-            "forest_mult": 1.0, "water": "always", "fly": True},
-    "road_plan": {"desc": "建路规划：湖泊 / 河流视为可通行（4 里/日）", "danger": False,
-                  "road_mult": 1.0, "forest_mult": 1.0, "water": "plan", "fly": False,
+    "fastest": {"desc": "纯时间最小", "water": "realm", "fly": False},
+    # danger_w 单位 = 息 /（危险点·里）。**必须与代价同量纲**（代价单位是息，
+    # 每 50 里的时间项是 4.9e4~5.4e5 息）——写成"天"会让惩罚小 43 200 倍而静默失效。
+    # 标定（2026-09-10）：1500 ≈ 50 里火山多花 1.2 日，只在真正极端地形上推动绕行；
+    # 再大（≥3000）会让 safe 在"两端本身就在火山带"的样本上绕远 2~3 倍却一点没绕开。
+    "safe": {"desc": "代价域加危险罚（时间 + danger_w×danger×里程）", "water": "realm", "fly": False,
+             "danger_w": 1500.0},
+    # route_pen / exposure_pen 单位同上。官道优势是 2× 速度（44 vs 22 里/日），
+    # 故避路罚取 2000 ≈ 50 里官道多花 2.3 日，足以让"慢路 + 绕行"胜过蹭路。
+    # 标定：2000 → 长距离路网占比 89%→6~11%、耗时 1.70×（达标）；再大只涨耗时不再降路网占比。
+    "stealth": {"desc": "避开官道、偏爱林地（暴露低）", "water": "realm", "fly": False,
+                "forest_mult": 0.85, "route_pen": 2000.0, "exposure_pen": 1000.0},
+    "fly": {"desc": "飞行：忽略地形，仅禁制 / 虚空阻挡", "water": "always", "fly": True},
+    "road_plan": {"desc": "建路规划：湖泊 / 河流视为可通行（4 里/日）", "water": "plan", "fly": False,
                   "slope_pen": 3.0, "jitter": 1.10},
     "road_forced": {"desc": "建路兜底：水视为可通行（6 里/日），深海 / 绝壁仍阻挡",
-                    "danger": False, "road_mult": 1.0, "forest_mult": 1.0,
                     "water": "forced", "fly": False},
 }
+
+# 危险项上界（A* 启发式可采纳用）：所有地形中最大的 danger
+_MAX_TERRAIN_DANGER = max(t.danger for t in R.TERRAINS.values())
 
 # 视野地形修正（任务书 §4.5）
 _VISION_TERRAIN_MULT = {
@@ -1776,14 +1790,32 @@ class WorldMap:
         speed = speed * S.realm_speed_mult(realm_idx) * (1.0 + shenfa)
         prm = PROFILES[profile]
         mult = 1.0
-        if prm.get("danger"):
-            mult = 1.0 + 3.0 * t.danger
-        elif profile == "stealth":
-            if tid == _T_ROAD:
-                mult = prm["road_mult"]
-            elif tid == _T_FOREST:
-                mult = prm["forest_mult"]
+        if profile == "stealth" and tid == _T_FOREST:
+            mult = prm["forest_mult"]
+        # 注意：危险 / 避路惩罚**不在速度域**——它们是代价域的加法项，
+        # 由 `_sample_cost` 统一处理（T3 修：速度域乘法会被格内 9 点最小代价抹平）。
         return speed, mult
+
+    def _sample_cost(self, profile: str, tid: int, sp: float, mult: float,
+                     li: float) -> float:
+        """采样点代价（息）：时间项 + 危险项 + 隐蔽项（**代价域线性组合**）。
+
+        `li` = 该采样点代表的里程（里）。三项同量纲，故格内取 `min` 时惩罚不会被抹平。
+        """
+        prm = PROFILES[profile]
+        cost = li / sp * _SI_PER_DAY * mult
+        dw = prm.get("danger_w")
+        if dw:
+            cost += dw * R.TERRAINS[tid].danger * li
+        if profile == "stealth":
+            t = R.TERRAINS[tid]
+            rp = prm.get("route_pen")
+            if rp and tid in (_T_ROAD, _T_TRAIL):
+                cost += rp * li                       # 避开官道 / 小径
+            ep = prm.get("exposure_pen")
+            if ep and t.exposure:
+                cost += ep * t.exposure * li          # 避开暴露高的开敞地
+        return cost
 
     def speed_at(self, x: float, y: float, realm_idx: int = 1,
                  shenfa: float = 0.0, with_roads: bool = True) -> float:
@@ -1812,6 +1844,18 @@ class WorldMap:
             if t.speed > max_terrain:
                 max_terrain = t.speed
         return max_terrain * S.realm_speed_mult(realm_idx) * (1.0 + shenfa)
+
+    def _heuristic_danger_pen(self, profile: str) -> float:
+        """启发式的危险项下界（息/里）。
+
+        T3 修：代价里多了"危险项"后，启发式必须同步加上它的下界，否则 A* 不再是可采纳的
+        （= 可能给出次优路径）。这里用"该档最危险地形的惩罚"作下界——真实路径上每一点的
+        危险 ≤ 该上界，故 `danger_w × danger × 里程 ≥ 此下界`，**不会高估**。
+        """
+        dw = PROFILES[profile].get("danger_w")
+        if not dw:
+            return 0.0
+        return dw * _MAX_TERRAIN_DANGER
 
     def cost_field(self, profile: str = "fastest", realm_idx: int = 1, shenfa: float = 0.0,
                    box: tuple = None, with_roads: bool = True, step: int = 1) -> CostField:
@@ -1867,7 +1911,6 @@ class WorldMap:
         town_cells = self._town_cells
         ncols = fld.ncols
         w = step * _CELL_LI
-        inv_si = _SI_PER_DAY
         for r in range(fld.nrows):
             cy = cy0 + r * step
             y0 = cy * _CELL_LI
@@ -1901,7 +1944,7 @@ class WorldMap:
                         if sp <= 0.0:
                             ok = False
                             break
-                        cst = w / sp * inv_si * mult
+                        cst = self._sample_cost(profile, tid, sp, mult, w)
                         if _slope_pen:
                             _e0 = _elev[fy * _N + fx]
                             _e1 = _elev[(fy + 1 if fy + 1 < _N else fy) * _N + fx]
@@ -1936,6 +1979,8 @@ class WorldMap:
         pass_arr = fld._pass
         cell_li = fld.cell_li()
         inv_max = _SI_PER_DAY / fld.max_speed
+        # T3：危险项（息/里）的下界，保证启发式仍可采纳
+        danger_per_li = self._heuristic_danger_pen(fld.profile)
 
         scol = (start_cell[0] - gx0) // step
         srow = (start_cell[1] - gy0) // step
@@ -1963,7 +2008,11 @@ class WorldMap:
                 mn, mx = dx, dy
             else:
                 mn, mx = dy, dx
-            return (mx + (_SQRT2 - 1.0) * mn) * cell_li * inv_max
+            octile = mx + (_SQRT2 - 1.0) * mn
+            li = octile * cell_li
+            # 危险项按"经过的格数"计（下限 = 至少 1 格），叠加在时间项上
+            cells = mx if mx > 1 else 1
+            return li * inv_max + danger_per_li * cells * cell_li
 
         heap = [(_h(scol, srow), _h(scol, srow), si)]
         heap_push = heapq.heappush

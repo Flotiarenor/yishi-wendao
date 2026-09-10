@@ -681,18 +681,33 @@ for _d, _aid, _bid, _a, _b in _adj_pairs[::max(1, len(_adj_pairs) // 80)][:80]:
     if _st_tested >= 12:
         break
 check("G50a stealth 官道占比 ≤ fastest（%d 对）" % _st_tested, (_sum_s / max(1, _cells_s)) <= (_sum_f / max(1, _cells_f)) + 0.02 and _st_tested >= 3)
-# G50b safe 对危险地形加价（代价模型口径，不依赖「某条路径恰好穿过火山/沼泽」的巧合）
-_sw_cell = next(((cx, cy) for cy in range(0, N, 4) for cx in range(0, N, 4)
-                 if WMAP.base_terrain(cx, cy) in (R.T_SWAMP, R.T_LAVA)), None)
-_sf_ok = False
-if _sw_cell is not None:
-    _box = (max(0, _sw_cell[0] - 1), max(0, _sw_cell[1] - 1),
-            min(M, _sw_cell[0] + 1), min(M, _sw_cell[1] + 1))
-    _ff = WMAP.cost_field("fastest", 1, 0.0, box=_box)
-    _fs = WMAP.cost_field("safe", 1, 0.0, box=_box)
-    if _ff.passable(*_sw_cell) and _fs.passable(*_sw_cell):
-        _sf_ok = _fs.cost(*_sw_cell) > _ff.cost(*_sw_cell) * 1.5
-check("G50b safe 对火山/沼泽地形加价（代价模型）", _sf_ok, str(_sw_cell))
+# G50b safe 对危险地形加价（T3 改：直接量代价模型，不依赖"恰好搜到某格"的巧合）
+# 旧口径断言 ">1.5×" 属速度域乘法时代（`mult = 1 + 3×danger`）；T3 改为**代价域线性组合**后，
+# 加价幅度 = danger_w×danger×里程 ÷ 时间项，实测火山 +12.5%、峡谷 +19.4%（见 profile 注释）。
+_sw_ok = True
+_sw_detail = []
+for _tid in (R.T_LAVA, R.T_CANYON, R.T_SWAMP, R.T_MOUNTAIN):
+    _sp, _m = WMAP._sample_speed("fastest", _tid, 1, 0.0)
+    _cf = WMAP._sample_cost("fastest", _tid, _sp, _m, S.WORLD_CELL_LI)
+    _cs = WMAP._sample_cost("safe", _tid, _sp, _m, S.WORLD_CELL_LI)
+    _sw_detail.append("%s %.3f×" % (R.TERRAINS[_tid].name, _cs / _cf))
+    if not _cs > _cf * 1.10:
+        _sw_ok = False
+check("G50b safe 对危险地形加价 ≥10%（代价域口径）", _sw_ok, " ".join(_sw_detail))
+# 无危险地形的地形不得加价（危险项必须严格独立于时间项）
+_nodanger_ok = True
+for _tid in (R.T_PLAIN, R.T_ROAD, R.T_HILL):
+    _sp, _m = WMAP._sample_speed("fastest", _tid, 1, 0.0)
+    _cf = WMAP._sample_cost("fastest", _tid, _sp, _m, S.WORLD_CELL_LI)
+    _cs = WMAP._sample_cost("safe", _tid, _sp, _m, S.WORLD_CELL_LI)
+    if abs(_cs - _cf) > 1e-6:
+        _nodanger_ok = False
+check("G50c safe 对无危险地形不加价（危险项与时间项正交）", _nodanger_ok)
+# 代价单位一致性（防"量纲写错 → 惩罚静默失效"，本轮踩过：写成"天"小 43200 倍）
+_dist_ok = (WMAP._sample_cost("safe", R.T_LAVA, 4.0, 1.0, 100.0)
+            - WMAP._sample_cost("fastest", R.T_LAVA, 4.0, 1.0, 100.0)
+            > 1000.0)
+check("G50d 危险罚与里程成正比且量级正确（息，非 0 罚）", _dist_ok)
 # 路径层面：抽到的样本对若确实穿越险地，safe 不得比 fastest 走更多险地
 _sf_path_ok = True
 _sf_tested = 0
