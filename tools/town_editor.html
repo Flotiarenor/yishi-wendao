@@ -115,6 +115,7 @@
     <button class="act" id="genZones">按建筑自动分区</button>
   </div>
   <div class="row">
+    <button class="act primary" id="genFill">填满城内（空地→建筑）</button>
     <button class="act" id="genTidy">清理孤岛/补门路</button>
   </div>
 
@@ -282,7 +283,7 @@ function drawCell(cx, cy) {
   const showZ = view !== "tile" && zn;
 
   if (showT && ch !== ".") {
-    ctx.fillStyle = view === "both" ? "#8a8a8a" : TILE[ch].color;   // 叠加视图下要素画成灰，让分区色显出来
+    ctx.fillStyle = view === "both" ? "#4a4a4a" : TILE[ch].color;   // 叠加视图下要素压暗，分区色才看得清
     const inset = ch === "#" ? 0 : 1;
     ctx.fillRect(X + inset, Y + inset, Z - inset * 2, Z - inset * 2);
   }
@@ -612,6 +613,45 @@ function genZones() {
   }
   draw();
 }
+/** 填满城内：城墙以内、非道路的地方尽量铺满建筑（用户要求"城内不要留白"）。
+ *
+ *  规则：从城心洪泛出**城内区域**（被城墙/城门围住的连通块），区内每个空 `.`
+ *  尽量变成 `#`；保留"建筑之间隔 1 格"的人行缝，避免整片死黑的闷块。
+ *  城外的 `.` 不动。分区层不受影响。
+ */
+function genFill() {
+  pushUndo();
+  const m = 2;
+  // 1) 从城心洪泛，求城内区域（遇到 = 与 G 停下；"." 与 "+" 都算可走，便于绕到各街区）
+  const inside = Array.from({ length: H }, () => new Array(W).fill(false));
+  const st = [[(W / 2) | 0, (H / 2) | 0]];
+  inside[(H / 2) | 0][(W / 2) | 0] = true;
+  while (st.length) {
+    const [x, y] = st.pop();
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H || inside[ny][nx]) continue;
+      const c = grid[ny][nx];
+      if (c === "=" || c === "G") continue;          // 城墙/城门挡住洪泛
+      if (c === "T") continue;                        // 树林也算城内空地（会被填）
+      inside[ny][nx] = true;
+      st.push([nx, ny]);
+    }
+  }
+  // 2) 城内空格 → 建筑（与已有建筑至少隔 1 格，保留人行缝）
+  let placed = 0, kept = 0;
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    if (!inside[y][x] || grid[y][x] !== ".") continue;
+    let adjB = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (at(x + dx, y + dy) === "#") adjB++;
+    if (adjB >= 3) { kept++; continue; }              // 留缝：贴着 3 个以上建筑就不再叠
+    grid[y][x] = "#";
+    placed++;
+  }
+  draw();
+  updateStatus(`城内补建筑 ${placed} 格（留缝 ${kept} 格）`);
+}
+
 function genTidy() {
   pushUndo();
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
@@ -693,6 +733,23 @@ function diagnose() {
   let empty = 0;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (grid[y][x] === "." && !zones[y][x]) empty++;
   if (empty / (W * H) > 0.5) warns.push(`空旷：${(empty / (W * H) * 100).toFixed(0)}% 的格子既无要素也无分区`);
+  // 城内留白：城墙围住的区域内还剩多少空格（用户要求城内应铺满，不留白）
+  const insideN = [], insideEmpty = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (grid[y][x] === "=" || grid[y][x] === "G") continue;
+    // 判定"在城内"：上下都能碰到城墙（简单纵向夹逼），比洪泛便宜且够用
+    let up = false, down = false;
+    for (let yy = y - 1; yy >= 0; yy--) { if (grid[yy][x] === "=") { up = true; break; } if (grid[yy][x] === "G") { up = true; break; } }
+    for (let yy = y + 1; yy < H; yy++) { if (grid[yy][x] === "=") { down = true; break; } if (grid[yy][x] === "G") { down = true; break; } }
+    if (up && down) {
+      insideN.push(0);
+      if (grid[y][x] === ".") insideEmpty.push(0);
+    }
+  }
+  if (insideN.length) {
+    const ratio = insideEmpty.length / insideN.length;
+    if (ratio > 0.25) warns.push(`城内留白：城墙内 ${(ratio * 100).toFixed(0)}% 的格子还是空 \`.\`（建议点「填满城内」；交互设施与道路不算留白）`);
+  }
   // 设施连通块统计（与引擎 content/town_layouts.py 同口径）
   const fac = facilityCounts();
   return { errs, warns, comps, gates, emptyRatio: empty / (W * H), fac };
@@ -903,6 +960,7 @@ document.getElementById("clearZone").onclick = () => { pushUndo(); for (let y = 
 document.getElementById("genGrid").onclick = genGridRoads;
 document.getElementById("genWall").onclick = genWall;
 document.getElementById("genBlocks").onclick = genBlocks;
+document.getElementById("genFill").onclick = genFill;
 document.getElementById("genZones").onclick = genZones;
 document.getElementById("genTidy").onclick = genTidy;
 document.getElementById("export").onclick = exportJson;
