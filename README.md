@@ -16,12 +16,20 @@ Python 单机文字修仙游戏。终端可玩，纯规则引擎 + 确定性随�
 ```powershell
 cd D:\project\Python\yishi-wendao
 .venv\Scripts\python.exe -X utf8 main.py            # 统一入口：起 Web 壳（浏览器玩）
+.venv\Scripts\python.exe -X utf8 main.py app        # 桌面壳（pywebview 原生窗口；需 pip install pywebview）
+powershell -ExecutionPolicy Bypass -File tools\make_shortcut.ps1   # 生成带 AppUserModelID 的桌面快捷方式
 .venv\Scripts\python.exe -X utf8 main.py web --port 8000   # 覆盖默认端口（默认 8044）
 .venv\Scripts\python.exe -X utf8 main.py smoke --lives 20  # 自动 bot 回归（记录分布/战斗统计）
 .venv\Scripts\python.exe -X utf8 main.py test              # 一键跑全部测试（13 个单测文件 + 冒烟 20 局）
 .venv\Scripts\python.exe -X utf8 main.py check             # content/ 数据校验（--strict 警告也失败）
 .venv\Scripts\python.exe -X utf8 -m tools.dummy            # 木桩试招（7 流派对照）
 ```
+
+> **双模式**（`docs/Web架构方案.md` §5 / 附录 A）：`web`（浏览器，开发期）与 `app`（原生窗口，分发期）
+> **共用同一个 FastAPI app 与同一份 `frontend/dist`**，前端与引擎零改动。
+> 桌面壳已设置自己的 **AppUserModelID**（任务栏分组/固定/通知归属）。
+> ⚠️ **音量合成器里仍显示「Microsoft Edge WebView2」**——WebView2 的上游限制，
+> 与全屏/托盘/通知等系统接口无关（要改则见该文档附录 A.2：优选"音频由宿主进程播"）。
 
 ### 开发期工具（`tools/`，引擎运行时零依赖）
 
@@ -113,6 +121,10 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
   早退 `return` 之后的 36 行重复死代码
 - ✅ **P4 附赠：地图右键「走到那里」**：`travel` 支持 `x`/`y` 坐标目的地（与地名共用寻路管线，
   **无舆图同样被拒**；脚下 60 里内走"近距挪动"）；前端右键 → 目的地标记 + 候选（真实耗时）→ 点选执行
+- ✅ **桌面壳（pywebview）**：`main.py app` 起原生窗口，与 `main.py web` 共用同一个 app 与前端产物；
+  `server/desktop.py` 设置自己的 **AppUserModelID**、窗口标题与图标（`assets/app.ico`），
+  `tools/make_shortcut.ps1` 生成带同 AUMID 的桌面快捷方式（`pythonw` 启动、无控制台）。
+  Windows 集成能力与边界（音量合成器 / 全屏 / 托盘 / 换壳路径）见 `docs/Web架构方案.md` 附录 A
 - ✅ **P4 T4-B 情报可买卖**（定案 §5「情报是资源」）：`content/intel.py` 货单 +
   `Game.reveal_map_intel()`（买来的情报半径**不受境界限制**，与"亲自踏勘"分工明确）+
   `_buy_intel()`（买图改档 / 买当地情报写 `discovered`）+ 坊市面板「情报」货段；

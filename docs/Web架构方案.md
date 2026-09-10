@@ -189,8 +189,100 @@ POST /api/undo  {run_id}          → checkpoint 回溯（会话内，同现逻�
   **地图是主页面，战斗临时接管主内容区**（时间轴 + 决策窗口 + 队列），坊市/书库/编年史为临时视图；
   **无行动栏**——闭关/参悟/突破/静养收进「修炼页」（主内容区视图）。
   （首版把地图/坊市做成覆盖层 → 探索后看不到文字；第二版用行动抽屉 → 用户改为日常动作直接进主页面。）
-- **阶段 3**：pywebview 桌面壳（Windows 分发），复用 OmniBox `main.py` 双模式启动写法。
-  （`vite.config.ts` 已设 `base: "./"`，file:// 加载无需改动）
+- **阶段 3（✅ 已落地 2026-09-11）**：pywebview 桌面壳（Windows）。
+  实现：`server/desktop.py`（窗口 + 进程身份）+ `main.py app [--port] [--devtools]`；
+  启动器 `tools/make_shortcut.ps1`（带 AppUserModelID 的快捷方式）+ `assets/app.ico`。
+  **与 `main.py web` 共用同一个 `create_app()` 与同一份 `frontend/dist`，前端与引擎零改动。**
+
+---
+
+## 附录 A：Windows 集成 —— 我们"像不像一个自己的程序"
+
+> 起因（2026-09-11 用户提问）：**音量合成器里显示的是 WebView2 而不是我们的应用**；
+> 往后还想做**全屏**之类的系统级操作，希望更偏向"我们自己的程序"。
+> 本节把"哪些能控、哪些控不了、要控到什么程度该换什么壳"一次写清。
+
+### A.1 先把"身份"拆开：四个不同的东西，别混为一谈
+
+| 表现 | 由谁决定 | WebView2 系壳层能否自己说了算 |
+|---|---|---|
+| 标题栏 / Alt-Tab 名称 | 窗口 `title` | ✅ 完全可以（`server/desktop.py` 传「一世问道 · 文字修仙」） |
+| 任务栏图标 | 窗口图标 / 进程 exe | ✅ 可以（`assets/app.ico`；start(icon=…)） |
+| **任务栏分组 / 固定到任务栏 / 通知归属** | **AppUserModelID** | ✅ 可以——**我们已经显式设置**（`_set_app_user_model_id()` + 快捷方式里写同名 AUMID） |
+| **音量合成器里的名字** | **WebView2 宿主进程（`msedgewebview2.exe`）** | ❌ **不能**——上游限制（见 A.2） |
+
+**全屏、置顶、任务栏进度、跳跃列表、缩放到系统 DPI 这些"操作类"接口，属于第一、三行的范畴，
+都能控**，不是 WebView2 的限制（见 A.4 怎么做）。
+
+### A.2 音量合成器那条：**确认是 WebView2 的限制，不是我们的配置问题**
+
+WebView2 把音频会话标成 `Microsoft Edge WebView2` 而不是宿主应用名，是**上游未修**问题：
+
+- WebView2Feedback [#2236](https://github.com/MicrosoftEdge/WebView2Feedback/issues/2236)
+- WebView2Feedback [#3743](https://github.com/MicrosoftEdge/WebView2Feedback/issues/3743)
+- 同类现象（宿主被 WebView 抢走音频会话归属）在 Win32WebViewHost 也出现过：
+  CommunityToolkit [Win32 #39](https://github.com/CommunityToolkit/Microsoft.Toolkit.Win32/issues/39)
+
+**影响面**：本游戏**当前完全没有音频**（全库无 `Audio` / `mp3` / `wav` / `ogg` / 音效），
+所以这条今天不影响任何东西。**等要加音效时**，两条出路：
+
+1. **音频由宿主进程（Python 侧）播**（`winsound` / `simpleaudio` / 独立音频进程）——
+   音频会话就归我们自己的进程，音量合成器里显示我们的名字与图标；**不用换壳**。
+2. 换掉 WebView2 系壳层（见 A.5）——宿主进程自己拥有音频会话。
+
+> 结论：**为了音量合成器换壳，性价比很低**；先把音频放宿主进程试。
+
+### A.3 现在的实际能力（pywebview 6 + WinForms 后端）
+
+今天已经做到、且**不需要换任何东西**的：
+
+- 原生窗口 + 自己的标题 + 自己的图标 + **自己的 AppUserModelID**（任务栏分组/固定/通知归属）
+- `pythonw.exe` 启动 → **无控制台黑框**；`main.py app` 与 `main.py web` 双模式共用后端
+- 窗口尺寸/最小尺寸/可缩放/文本可选中/Ctrl+滚轮缩放（`create_window(text_select=…, zoomable=…)`）
+- DevTools（`--devtools`）
+
+### A.4 想要更多 Windows 接口时的升级路径（**不换壳**）
+
+pywebview 6 的 Windows 后端就是 **WinForms**（`pythonnet` 已在环境里）。窗口对象可直接取到底层：
+
+```python
+win = webview.windows[0]
+form = win.native          # WinForms 的 Form 实例（pywebview 6 在 winforms 后端上暴露）
+hwnd = form.Handle         # HWND → ctypes/windll 想调什么 Win32 API 都行
+
+# 例：真·全屏（占满显示器而不是"最大化"）
+form.FormBorderStyle = System.Windows.Forms.FormBorderStyle.None
+form.WindowState = System.Windows.Forms.FormWindowState.Maximized
+form.TopMost = True
+# 例：任务栏进度 / 缩略图按钮 / 通知，走 ITaskbarList3、Shell_NotifyIcon、Toast COM
+```
+
+也就是说：**全屏、置顶、无边框、任务栏进度、托盘图标、Toast 通知、DPI 感知（manifest）、
+单实例（命名 Mutex）、开机自启（注册表 Run 键）、文件关联**——这些都能在**现在的壳里**做，
+只是每加一个都要写一小段 Win32/pythonnet 代码。**这是推荐路线**：先按需加，
+不要为了"以后可能用到"现在就换技术栈。
+
+### A.5 什么时候才真的该换壳（三个选项与代价）
+
+**关键前提**：前端与引擎**彻底解耦**——前端只走 HTTP（`fetch('/api/...')`）、dist 由任一后端伺服，
+**换壳不动一行玩法代码与前端代码**。所以换壳是"壳层局部手术"，不是重写。
+
+| 选项 | 换来什么 | 代价 |
+|---|---|---|
+| **① 留在 pywebview + 原生扩展**（A.4） | 上面列的绝大多数 Windows 接口；零迁移成本 | 每个系统特性要自己写 Win32/pythonnet 小段；进程仍是 `python.exe`（打包成 exe 才好看） |
+| **② C# WPF/WinForms + WebView2 自己做** | **真·原生 app**：自己的 exe、自己的进程身份、完整的 .NET/Win32 面（窗口、托拉、通知、音频会话全归自己） | 引入 C#/.NET 工程与构建链；要复刻现有 HTTP 契约的宿主部分；发布要带 .NET 运行时（或 self-contained） |
+| **③ Tauri / Wails（Rust）** | **单一自包含 exe**、现代窗口特效、系统托盘/通知、音频会话归自己；跨平台 | 引入 **Rust 工具链**；桌面侧要重写（前端可原样搬）；本项目的"Python 引擎"要作为 sidecar 进程或服务带出去 |
+
+**建议**：
+1. **现在**：留在 pywebview（①），需要什么加什么——A.4 的能力已经覆盖"全屏/置顶/托盘/通知"这类诉求。
+2. **要"发出去给别人装"时**再考虑 ②/③：那时的驱动力应该是**分发形态**（单文件 exe、安装包、
+   不暴露 Python 环境），而不是"音量合成器里显示什么名字"。
+3. **音频**先走 A.2 的"宿主进程播放"，能解决名字问题且不换壳。
+
+> ⚠️ 反面教训记一笔：本项目的**判据同口径**原则同样适用于壳层——
+> 不要出现"桌面壳一套、浏览器一套"的行为差异。双模式共用 `server.app.create_app()`，
+> 任何壳层特有能力（如托盘）都必须有浏览器模式的降级路径。
+
 
 ## 9. 里程碑与验收判据
 

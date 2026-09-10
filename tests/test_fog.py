@@ -385,5 +385,48 @@ check("H19 无舆图买粗舆图 → 改档 coarse",
 check("H20 改档后 travel 恢复可用（买图真的接上了玩法）",
       g_none.step("travel", site=str(ST.LINGMAI)).ok is True, "")
 
+# ============ I. 桌面壳（pywebview）接线 ============
+# 只验"窗口该怎么开 + 服务端能不能起来"——**不真开窗口**（CI/无桌面环境下会失败，
+# 而且弹窗不属于单测）。窗口本身靠 `python main.py app` 人工看一眼即可。
+print("\n== I 桌面壳接线（不开窗口）==")
+try:
+    from server import desktop as DS
+    _ok_import = True
+except Exception as e:  # noqa: BLE001
+    _ok_import = False
+    check("I1 server.desktop 可导入", False, repr(e))
+if _ok_import:
+    check("I1 server.desktop 可导入（pywebview 是延迟导入，没装也不影响引擎）", True)
+    plan = DS.build_plan(host="127.0.0.1", port=8123)
+    check("I2 窗口计划：URL / 标题 / 尺寸",
+          plan["url"] == "http://127.0.0.1:8123/" and plan["title"] == DS.APP_TITLE
+          and plan["width"] == 1280 and plan["height"] == 860, str(plan))
+    check("I3 窗口计划带 AppUserModelID（任务栏分组靠它）",
+          plan["aumid"] == DS.APP_USER_MODEL_ID == "YishiWendao.Xiuxian", plan["aumid"])
+    check("I4 WebView2 数据目录落在用户目录（不污染仓库）",
+          plan["user_data_dir"].startswith(os.path.expanduser("~")) and "yishi-wendao" in plan["user_data_dir"],
+          plan["user_data_dir"])
+    check("I5 图标存在且被计划采用（assets/app.ico）",
+          plan["icon"] is not None and os.path.basename(plan["icon"]) == "app.ico",
+          str(plan["icon"]))
+    # 服务端线程能否真的起来（用空闲端口，起完就让它随进程退出）
+    import socket as _sock
+    with _sock.socket() as _s:
+        _s.bind(("127.0.0.1", 0))
+        _free = _s.getsockname()[1]
+    try:
+        from server.app import create_app
+        th = DS._start_server(create_app(), "127.0.0.1", _free, timeout=25.0)
+        with _sock.socket() as _s2:
+            _s2.settimeout(1.0)
+            _conn = _s2.connect_ex(("127.0.0.1", _free)) == 0
+        check("I6 桌面壳能在后台线程起服务端且端口可连", _conn and th.is_alive(),
+              f"conn={_conn} alive={th.is_alive()}")
+    except Exception as e:  # noqa: BLE001
+        check("I6 桌面壳能在后台线程起服务端且端口可连", False, repr(e))
+    check("I7 启动器脚本与图标都在（tools/make_shortcut.ps1 + assets/app.ico）",
+          os.path.exists(os.path.join(ROOT, "tools", "make_shortcut.ps1"))
+          and os.path.exists(os.path.join(ROOT, "assets", "app.ico")), "")
+
 print("\n== 结果：%d 过 / %d 败 ==" % (_PASS, _FAIL))
 sys.exit(1 if _FAIL else 0)

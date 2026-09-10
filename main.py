@@ -30,6 +30,8 @@ USAGE = """一世问道 · 文字修仙 —— 统一入口
   python main.py                  起 Web 壳（默认，浏览器打开 http://127.0.0.1:8044）
   python main.py web [--port N]   同上（可指定端口）
   python main.py web --debug [--stones N]   开发调试模式：新局自动发灵石（默认 999999）
+  python main.py app [--port N]   桌面壳（pywebview 原生窗口；需 pip install pywebview）
+                                  --devtools 开 F12；--debug/--stones 同 web
   python main.py smoke [--lives N] [--log]   自动 bot 回归（记录分布与战斗统计）
   python main.py test             跑全部测试（时间轴/动作/战斗/加固/内容工具 + 冒烟）
   python main.py check [--strict]  content/ 数据校验（id/引用/取值；--strict 警告也失败）
@@ -50,6 +52,20 @@ USAGE = """一世问道 · 文字修仙 —— 统一入口
 def _run_web(argv):
     from server.main import main as web_main
     rc = web_main(argv)
+    if rc:
+        sys.exit(rc)
+
+
+def _run_desktop(argv):
+    """桌面壳（pywebview 原生窗口）——与 `web` 共用同一个 FastAPI app 与前端产物。"""
+    from server.desktop import parse_args, run
+    args = parse_args(argv)
+    if args.debug or args.stones is not None:
+        from engine import debug as DBG
+        DBG.enable(stones=(args.stones if args.stones is not None else DBG.DEFAULT_STONES))
+        print(f"⚠ 调试模式已开启（--debug）：新局自动发 {DBG.peek_pending().stones} 灵石")
+    rc = run(host=args.host, port=args.port, devtools=args.devtools,
+             width=args.width, height=args.height)
     if rc:
         sys.exit(rc)
 
@@ -100,6 +116,8 @@ def main(argv=None):
     cmd = argv[0].lower() if argv else "web"
     if cmd in ("web", "serve", "server"):
         _run_web(argv[1:])
+    elif cmd in ("app", "desktop"):
+        _run_desktop(argv[1:])
     elif cmd == "smoke":
         _run_smoke(argv[1:])
     elif cmd == "test":
@@ -112,7 +130,6 @@ def main(argv=None):
         print(f"未知子命令：{argv[0]}\n")
         print(USAGE)
         sys.exit(2)
-
 
 if __name__ == "__main__":
     main()
