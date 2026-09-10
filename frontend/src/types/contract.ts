@@ -64,6 +64,79 @@ export interface OwnedGongfa {
 export interface LocationInfo {
   id: number;
   name: string;
+  /** 世界坐标（里，P4-T3 起） */
+  x?: number;
+  y?: number;
+  /** 舆图档：none | coarse | detailed */
+  map_level?: string;
+}
+
+// ---------- 地图（P4-T3：engine/game.py `map_view()`） ----------
+export interface MapTown {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  /** 到玩家当前位置的里程（里） */
+  dist_li: number;
+  is_main: boolean;
+  tier: string;
+  radius_li: number;
+  /** 是否到过（`WorldState.places` 记录） */
+  visited: boolean;
+  /** 是否就是脚下这座 */
+  here: boolean;
+}
+
+export interface MapPoint {
+  id: string;
+  /** mine | herb | lair | ruin | secret | vein | post */
+  kind: string;
+  name: string;
+  /** 未探明时前端只显示 name_shown */
+  name_shown: string;
+  element: string;
+  x: number;
+  y: number;
+  dist_li: number;
+  /** 视野内或已发现 */
+  known: boolean;
+}
+
+export interface MapView {
+  self: { x: number; y: number; name: string };
+  map_level: string;
+  /** 本次下发的半径（里） */
+  radius_li: number;
+  /** 神识视野（里，随境界 + 地形遮蔽） */
+  vision_li: number;
+  towns: MapTown[];
+  points: MapPoint[];
+  /** 河流大势（抽样点 [x, y]） */
+  rivers: number[][];
+  counts: {
+    towns: number;
+    points: number;
+    known_points: number;
+    rivers: number;
+  };
+}
+
+/** `travel` 的一条候选路径（定案 §4.2：最快 / 最安全 / 最隐蔽） */
+export interface TravelRoute {
+  idx: number;
+  profile: string;
+  label: string;
+  /** 耗时（息，整数） */
+  si: number;
+  days: number;
+  li: number;
+  terrain_mix: Record<string, number>;
+  /** 官道 + 小径占比 */
+  road_share: number;
+  /** 危险地形占比 */
+  danger_share: number;
+  dest: { name: string; x: number; y: number };
 }
 
 // ---------- 战斗（engine/battle.py Battle.state()） ----------
@@ -155,6 +228,8 @@ export interface StateData {
   alive: boolean;
   spirit_stones: number;
   location: LocationInfo;
+  /** P4-T3：地图信息（按舆图档下发；无舆图时 towns/points 为空） */
+  map: MapView;
   inventory: InventoryItem[];
   pool: {
     main: PoolMain;

@@ -8,6 +8,7 @@ import type {
   RunMeta,
   StateData,
   StepResult,
+  TravelRoute,
 } from "@/types/contract";
 import { useUiStore } from "@/stores/ui";
 
@@ -328,6 +329,25 @@ export const useSessionStore = defineStore("session", {
 
     async travel(site: string) {
       const r = await this.run(...actions.travel(site));
+      if (r?.ok) this.afterMove();
+      return r;
+    },
+    /** 只看候选路径（纯查询：不推进时间、不移动） */
+    async planTravel(site: string): Promise<TravelRoute[]> {
+      const r = await this.run(...actions.travel(site));
+      if (!r?.ok) return [];
+      const d = r.data as { routes?: TravelRoute[] };
+      return d.routes || [];
+    },
+    /** 执行选中的候选 */
+    async travelRoute(site: string, route: number) {
+      const r = await this.run(...actions.travelGo(site, route));
+      if (r?.ok) this.afterMove();
+      return r;
+    },
+    /** 无舆图手动探路 */
+    async march(direction: string) {
+      const r = await this.run(...actions.march(direction));
       if (r?.ok) this.afterMove();
       return r;
     },

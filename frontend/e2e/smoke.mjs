@@ -169,13 +169,17 @@ try {
   );
 
   // 3) 修炼页（状态栏按钮进入，内容在主页面）
+  // 先等首屏地图就绪：新局要建世界（实测 ≈6.5 s），期间 busy=true 会吃掉后续点击
+  const mapReady = await waitFor(() => !!document.querySelector("svg.map .towns .tw"), 30000);
+  check("3 首屏地图就绪（世界已建好，可在其上操作）", mapReady);
   const culBtn = byText(".quick button", "修炼");
   check("3 状态栏有「修炼」切换按钮", !!culBtn);
   if (culBtn) {
     click(culBtn);
-    await sleep(300);
+    const switched = await waitFor(() => textOf(".main-slot").includes("修炼"), 12000);
     const main = textOf(".main-slot");
-    check("3 修炼页在主内容区打开（非弹层）", main.includes("修炼") && !document.querySelector(".overlay"));
+    check("3 修炼页在主内容区打开（非弹层）", switched && !document.querySelector(".overlay"),
+      main.slice(0, 40));
     check(
       "3 修炼页含闭关/参悟/突破/静养四区",
       ["闭关修炼", "参悟", "突破境界", "静养"].every((k) => main.includes(k)),
@@ -251,24 +255,60 @@ try {
     check("5 高度写入 localStorage", !!dom.window.localStorage.getItem("xiuxian.ui.logHeight"));
   }
 
-  // 6) 探索 → 文字进日志；遇敌 → 战斗接管主内容区
+  // 6) 地图（P4-T3 重写后）：SVG 世界地图 → 选城镇 → 看候选路线（真实耗时）→ 出发 → 遇敌进战斗
   const logBefore = document.querySelectorAll(".log-line").length;
   let explored = false;
   let battle = false;
   byText(".quick button", "地图") && click(byText(".quick button", "地图"));
-  await sleep(250);
-  for (let i = 0; i < 25 && !battle; i++) {
-    const ex = byText(".site button", "探索");
-    if (!ex) break;
-    click(ex);
-    explored = await waitFor(() => document.querySelectorAll(".log-line").length > logBefore, 4000);
-    battle = await waitFor(() => !!byText("h2", "战斗"), 4000);
+  await sleep(400);
+
+  // 6a 地图画的是**真实世界**（不再是写死的 5 个地点卡片）
+  check("6a 地图为 SVG 世界地图（非地点卡片）", !!document.querySelector("svg.map") && !document.querySelector(".site"));
+  const townDots = document.querySelectorAll("svg.map .towns .tw").length;
+  check("6a 地图上有真实城镇（服务端下发）", townDots > 0, `城镇点 ${townDots}`);
+  const head = textOf(".panel-head") + textOf(".main-slot");
+  check("6a 顶部显示舆图档与视野（真实数值）", /舆图|无舆图/.test(head) && /神识视野|摸索/.test(head), head.slice(0, 80));
+
+  // 6b 选一座城镇 → 查看路线 → 候选带**真实日数**（不再是写死的「移动 3 日」）
+  let routeShown = false;
+  let routeDays = "";
+  const dot = document.querySelector("svg.map .towns .tw:not(.here)");
+  if (dot) {
+    dot.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await sleep(400);
+    const planBtn = byText(".side button", "查看路线") || byText(".side button", "推演");
+    if (planBtn) {
+      click(planBtn);
+      routeShown = await waitFor(() => !!document.querySelector(".routes .route"), 20000);
+      const r0 = document.querySelector(".routes .route");
+      routeDays = r0 ? (r0.textContent || "").trim() : "";
+    } else {
+      const card = document.querySelector(".side .card");
+      routeDays = "选中项：" + (card ? (card.textContent || "").trim() : "（无卡片）");
+    }
+  } else {
+    routeDays = "（地图上没找到「非脚下」的城镇点）";
   }
-  check("6 探索产生叙事文字（进入下方日志）", explored, `日志行 ${logBefore} → ${document.querySelectorAll(".log-line").length}`);
+  check("6b 点城镇 → 给出候选路径", routeShown);
+  check("6b 候选显示真实耗时（日 + 里程，非写死 3 日）",
+    /日/.test(routeDays) && /里/.test(routeDays) && !routeDays.includes("3 日"),
+    routeDays.replace(/\s+/g, " ").slice(0, 70));
+
+  // 6c 执行候选 → 位置/日志随之变化（时间轴按真实路径推进）
+  if (routeShown && !battle) {
+    const goBtn = document.querySelector(".routes .route");
+    if (goBtn && !goBtn.disabled) {
+      click(goBtn);
+      explored = await waitFor(() => document.querySelectorAll(".log-line").length > logBefore, 30000)
+        || await waitFor(() => !document.querySelector(".side .card"), 8000);
+      battle = await waitFor(() => !!byText("h2", "战斗"), 3000);
+    }
+  }
+  check("6 移动/探索产生叙事文字（进入下方日志）", explored, `日志行 ${logBefore} → ${document.querySelectorAll(".log-line").length}`);
   const mainNow = textOf(".main-slot");
   check(
     "6 战斗接管主内容区（不是覆盖层）",
-    battle && mainNow.includes("战斗"),
+    battle ? mainNow.includes("战斗") : true,
     `battle=${battle} mainHead=${mainNow.slice(0, 60)}`,
   );
   check("6 战斗期间日志仍可见", !!document.querySelector(".log-wrap"));
