@@ -56,6 +56,7 @@ import engine.settings as S
 from content import actions as CA
 from content import enemies as EM
 from content import gongfa as G
+from content import intel as IN             # P4-T4B：情报货单（买图 / 买当地情报）
 from content import pills as P
 from content import regions as R
 from content import sites as ST
@@ -508,6 +509,7 @@ class Game:
         self._route_memo = {}    # (起点,终点,档位,境界,舆图档) → 候选路径（纯缓存，不入存档）
         self._map_memo = {}      # (坐标,舆图档,境界,发现版本,半径) → map_view 结果（纯缓存）
         self._disc_ver = 0       # T4：`discovered` 每变更一次 +1（**不存档**，只作缓存失效用）
+        self._intel_bought = set()  # T4-B：已买过情报的位置 (round(x,3), round(y,3))（不存档）
         # 调试：新局自动发资源（只在 `--debug` 时挂上，见 engine/debug.py）
         if DBG.enabled():
             _cfg = DBG.pending()
@@ -1241,6 +1243,114 @@ class Game:
                  "dist_li": round(math.hypot(p.x - x, p.y - y), 1)}
                 for p in fresh]
 
+    # ===== T4-B 情报买卖（买图 / 买点情报）=====
+    def reveal_map_intel(self, x: float, y: float, radius_li: float) -> list:
+        """**买来的情报**：把 (x, y) 半径内的内容点写进 `discovered`（返回新揭晓的点）。
+
+        与 `discover_here()` 的区别（两者共用同一份"已发现"真相，只是来源不同）：
+          - `discover_here()` = **亲自踏勘**：以**神识视野**（随境界 + 地形遮蔽）为半径；
+          - `reveal_map_intel()` = **买来的消息**：以**货单给的半径**为准，
+            **不受境界与地形遮蔽限制**（这就是"情报是资源"的意思——弱者也能买到强信息）。
+        未探明的内容点**不下发**（不是"给轮廓"，而是连"这里有一处"都不知道）。
+        """
+        wm = self.wmap
+        disc = self.state.world.discovered
+        fresh = []
+        for p in wm.content_points:
+            if p.id in disc:
+                continue
+            if math.hypot(p.x - float(x), p.y - float(y)) <= float(radius_li):
+                disc.add(p.id)
+                fresh.append(p)
+        if fresh:
+            self._disc_ver += 1
+        fresh.sort(key=lambda p: (math.hypot(p.x - x, p.y - y), p.id))
+        return self._fresh_points_data(tuple(fresh), x, y)
+
+    def _intel_data(self) -> dict:
+        """坊市货单里的情报段（只列当前档位下**还值得买**的舆图货 + 点情报）。"""
+        lvl = str(self.state.world.map_level or "none")
+        out = []
+        for it in IN.items_for_level(lvl):
+            out.append({
+                "id": it.id, "name": it.name, "price": it.price, "kind": it.kind,
+                "desc": it.desc,
+                "map_level": it.map_level,
+                "map_level_label": S.MAP_LEVEL_LABELS.get(it.map_level, "") if it.map_level else "",
+                "radius_li": (it.radius_li or S.INTEL_REVEAL_RADIUS_LI)
+                if it.kind == "point_intel" else 0.0,
+            })
+        return {"map_level": lvl, "map_level_label": S.MAP_LEVEL_LABELS.get(lvl, lvl),
+                "items": out}
+
+    def _buy_intel(self, iid: str) -> Result:
+        """买情报（须身处坊市）：舆图档位 / 当地点情报。"""
+        r = Result()
+        p = self.state.player
+        if not self.at_market():
+            return _reject(r, R_NOT_AT_MARKET, "须先前往【坊市】方能购买（travel 坊市）。")
+        it = IN.by_id(iid)
+        x, y = self.pos()
+        if it.kind == "map":
+            cur = str(self.state.world.map_level or "none")
+            if (cur in S.MAP_LEVEL_ORDER and it.map_level in S.MAP_LEVEL_ORDER
+                    and S.MAP_LEVEL_ORDER.index(it.map_level) <= S.MAP_LEVEL_ORDER.index(cur)):
+                return _reject(r, R_DUP_OWNED,
+                               f"你手中的舆图已经是【{S.MAP_LEVEL_LABELS.get(cur, cur)}】，"
+                               f"不必再买【{it.name}】。")
+            if p.spirit_stones < it.price:
+                return _reject(r, R_NO_STONES,
+                               f"灵石不足：需 {it.price}，你有 {p.spirit_stones}。")
+            p.spend_stones(it.price)
+            self.state.world.map_level = it.map_level
+            self._map_memo.clear()          # 档位变了 → 缓存必须失效
+            self.state.chronicle.add(p.age_years, f"于坊市购得【{it.name}】。")
+            label = S.MAP_LEVEL_LABELS.get(it.map_level, it.map_level)
+            return _accept(
+                r,
+                f"购得【{it.name}】（花费 {it.price} 灵石，余 {p.spirit_stones}）。"
+                f"舆图档位 → 【{label}】。{it.desc}",
+                {"kind": "intel", "id": it.id, "name": it.name, "intel_kind": it.kind,
+                 "unit_price": it.price, "total": it.price,
+                 "stones_after": p.spirit_stones,
+                 "map_level": it.map_level, "map_level_label": label,
+                 "newly_discovered": [], "discovered_total": len(self.state.world.discovered)},
+            )
+        # 点情报：揭示当前位置周边的内容点
+        if p.spirit_stones < it.price:
+            return _reject(r, R_NO_STONES,
+                           f"灵石不足：需 {it.price}，你有 {p.spirit_stones}。")
+        radius = float(it.radius_li or S.INTEL_REVEAL_RADIUS_LI)
+        # 「当地情报」卖的是**这一带**的消息：同一处买过就不该再卖
+        # （否则第二次是花 600 灵石换一句"附近没什么"——实测踩过）。
+        # 判据按世界坐标三位小数取整比较，与地图/寻路的坐标粒度一致。
+        spot = (round(x, 3), round(y, 3))
+        if spot in self._intel_bought:
+            return _reject(r, R_DUP_OWNED,
+                           f"这一带的【{it.name}】你已经买过了（商队不会再卖同一份消息）。"
+                           f"换个地方再问——走一段路后再买。")
+        fresh = self.reveal_map_intel(x, y, radius)
+        p.spend_stones(it.price)
+        self._intel_bought.add(spot)
+        self.state.chronicle.add(p.age_years, f"于坊市购得【{it.name}】。")
+        if fresh:
+            head = fresh[0]
+            tail = f"，另有 {len(fresh) - 1} 处" if len(fresh) > 1 else ""
+            body = (f"购得【{it.name}】（花费 {it.price} 灵石，余 {p.spirit_stones}）。"
+                    f"商队头领铺开旧图，指认 {radius:.0f} 里内 {len(fresh)} 处虚实："
+                    f"{head['kind_name']}【{head['name']}】{tail}——已入舆图。")
+        else:
+            body = (f"购得【{it.name}】（花费 {it.price} 灵石，余 {p.spirit_stones}）。"
+                    f"商队头领摇头：这附近 {radius:.0f} 里内并无什么值得记的东西。")
+        return _accept(
+            r, body,
+            {"kind": "intel", "id": it.id, "name": it.name, "intel_kind": it.kind,
+             "unit_price": it.price, "total": it.price,
+             "stones_after": p.spirit_stones,
+             "radius_li": radius,
+             "newly_discovered": fresh, "discovered_total": len(self.state.world.discovered)},
+        )
+
     # ===== 地图信息出口（T4 迷雾的前置；P4-T3 后补：UI 要显示真实地图）=====
     def map_view(self, radius_li: float = None) -> dict:
         """当前位置周边的地图信息（**按舆图档下发**，定案 §5）。
@@ -1541,7 +1651,7 @@ class Game:
                 "permanent_bonus": gf.permanent_bonus if readable else None,
                 "desc": gf.desc,
             })
-        return {"pills": pills, "gongfa": gongfa}
+        return {"pills": pills, "gongfa": gongfa, "intel": self._intel_data()}
 
     def _market_text(self) -> str:
         """坊市货单的叙事渲染（数据源 = _market_data）。"""
@@ -1567,6 +1677,13 @@ class Game:
                     f"{gf['name']}：{gf['price']} 灵石（{gf['tier_label']}·{gf['slot_label']}类）"
                     f"{gf['desc']}（境界未至【{gf['tier_label']}】，详情晦涩）"
                 )
+        it = d.get("intel") or {}
+        if it.get("items"):
+            lines.append(f"── 情报（现持【{it.get('map_level_label', '')}】）──")
+            for q in it["items"]:
+                extra = (f"→【{q['map_level_label']}】" if q["kind"] == "map"
+                         else f"（{q['radius_li']:.0f} 里内）")
+                lines.append(f"{q['name']}：{q['price']} 灵石{extra} {q['desc']}")
         return "\n".join(lines)
 
     def _buy(self, item_input: str, qty: int) -> Result:
@@ -1575,6 +1692,11 @@ class Game:
         if not self.at_market():
             return _reject(r, R_NOT_AT_MARKET, "须先前往【坊市】方能购买（travel 坊市）。")
         qty = max(1, min(qty, 99))
+        # 情报优先（T4-B）：舆图档位 / 当地点情报——id 与中文名都只在本货单内解析，
+        # 「粗舆图」这类名字不会与丹药/功法撞车
+        iid = IN.resolve(item_input)
+        if iid is not None:
+            return self._buy_intel(iid)
         # 丹药优先，其次功法（名字不冲突时互不影响）
         pid = P.resolve(item_input.strip())
         if pid is not None:

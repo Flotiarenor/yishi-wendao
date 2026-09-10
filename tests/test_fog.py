@@ -288,5 +288,102 @@ check("G4 往返后地图仍认这些点为已知（known_by=discovered）",
           if q["id"] in g_rt.state.world.discovered),
       "")
 
+# ============ H. 情报买卖（T4-B）============
+print("\n== H 情报买卖：买图改档 / 买点情报写 discovered ==")
+g = new_game()
+g.state.player.add_stones(999999)
+
+
+def _market_intel(gg):
+    return gg.step("market").data.get("intel") or {}
+
+
+mi = _market_intel(g)
+check("H1 坊市货单含情报段（档位 + 货）",
+      "map_level" in mi and isinstance(mi.get("items"), list) and len(mi["items"]) > 0,
+      str(mi))
+check("H2 货单情报带结构化字段（前端直接渲染，不解析 text）",
+      all(all(k in q for k in ("id", "name", "price", "kind", "desc")) for q in mi["items"]),
+      str(mi["items"][:1]))
+check("H3 coarse 档下不出售已持有的粗舆图，只列详图 + 当地情报",
+      [q["name"] for q in mi["items"]] == ["详图", "当地情报"],
+      str([q["name"] for q in mi["items"]]))
+# 买图：改档
+_s_before = g.state.player.spirit_stones
+r = g.step("buy", item="详图")
+check("H4 买详图 → 档位改 detailed",
+      r.ok is True and g.state.world.map_level == "detailed", f"{r.ok}/{r.reason} {g.state.world.map_level}")
+check("H5 买图扣款 = 货价（余额封顶无关）",
+      _s_before - g.state.player.spirit_stones == r.data["unit_price"]
+      and r.data["stones_after"] == g.state.player.spirit_stones,
+      f"{_s_before} → {g.state.player.spirit_stones}，价 {r.data['unit_price']}")
+check("H6 重复买同一档舆图 → dup_owned 且不扣款",
+      (lambda rr, s0: rr.ok is False and rr.reason == "dup_owned"
+       and g.state.player.spirit_stones == s0)(g.step("buy", item="详图"), g.state.player.spirit_stones),
+      "")
+check("H7 已到详图后货单只剩当地情报",
+      [q["name"] for q in _market_intel(g)["items"]] == ["当地情报"],
+      str([q["name"] for q in _market_intel(g)["items"]]))
+# 买点情报：写 discovered
+n0 = len(g.state.world.discovered)
+ri = g.step("buy", item="当地情报")
+check("H8 买当地情报 → 返回 newly_discovered",
+      ri.ok is True and isinstance(ri.data.get("newly_discovered"), list),
+      f"{ri.ok}/{ri.reason}")
+check("H9 揭晓半径 = 货单半径（不受神识视野限制——这才是买来的情报）",
+      ri.data.get("radius_li") == 600.0 and
+      all(q["dist_li"] <= 600.0 + 1e-6 for q in ri.data["newly_discovered"]),
+      f"radius={ri.data.get('radius_li')}")
+check("H10 揭晓的点都写进了 discovered",
+      len(g.state.world.discovered) == n0 + len(ri.data["newly_discovered"])
+      and all(q["id"] in g.state.world.discovered for q in ri.data["newly_discovered"]),
+      f"{n0} → {len(g.state.world.discovered)}")
+check("H11 discovered_total 与集合一致",
+      ri.data["discovered_total"] == len(g.state.world.discovered), "")
+check("H12 买到的点在舆图上算已发现（known_by=discovered）",
+      all(q["known_by"] == "discovered" for q in
+          (lambda: (setattr(g.state.world, "map_level", "detailed"), g.map_view()))()[1]["points"]
+          if q["id"] in (g.state.world.discovered)),
+      "")
+s_after = g.state.player.spirit_stones
+r_dup = g.step("buy", item="当地情报")
+check("H13 同一处再买 → dup_owned（不会花 600 灵石买一句附近没什么）",
+      r_dup.ok is False and r_dup.reason == "dup_owned", f"{r_dup.ok}/{r_dup.reason}")
+check("H14 拒绝时不扣款（未成交不收费）",
+      g.state.player.spirit_stones == s_after, f"{g.state.player.spirit_stones} vs {s_after}")
+# 换个地方可以再买
+g._set_pos_arrived(*[v + 900.0 for v in spawn_xy()])
+r2 = g.step("buy", item="当地情报")
+check("H15 换个地方可再买（消息按地方卖）",
+      (r2.ok is True) if g.at_market() else (r2.ok is False and r2.reason == "not_at_market"),
+      f"{r2.ok}/{r2.reason}")
+# 灵石不足
+g_poor = new_game()
+g_poor.state.player.spirit_stones = 1
+rp = g_poor.step("buy", item="当地情报")
+check("H16 灵石不足 → no_stones 且不扣款（余额仍为 1）",
+      rp.ok is False and rp.reason == "no_stones" and g_poor.state.player.spirit_stones == 1,
+      f"{rp.reason} {g_poor.state.player.spirit_stones}")
+# 不在坊市不能买情报
+g_far = new_game()
+g_far.state.player.add_stones(999999)
+g_far._set_pos_arrived(*[v + 5000.0 for v in spawn_xy()])
+rf = g_far.step("buy", item="当地情报")
+check("H17 不在坊市 → not_at_market（情报与丹药同门槛）",
+      rf.ok is False and rf.reason == "not_at_market", f"{rf.ok}/{rf.reason}")
+# none 档：两档舆图都可买（一次跳档是合理买法）
+g_none = new_game()
+g_none.state.world.map_level = "none"
+g_none.state.player.add_stones(999999)
+check("H18 无舆图时货单同时提供粗舆图与详图（允许一次买到详图）",
+      [q["name"] for q in _market_intel(g_none)["items"]] == ["粗舆图", "详图", "当地情报"],
+      str([q["name"] for q in _market_intel(g_none)["items"]]))
+check("H19 无舆图买粗舆图 → 改档 coarse",
+      (lambda rr: rr.ok is True and g_none.state.world.map_level == "coarse")(
+          g_none.step("buy", item="粗舆图")),
+      g_none.state.world.map_level)
+check("H20 改档后 travel 恢复可用（买图真的接上了玩法）",
+      g_none.step("travel", site=str(ST.LINGMAI)).ok is True, "")
+
 print("\n== 结果：%d 过 / %d 败 ==" % (_PASS, _FAIL))
 sys.exit(1 if _FAIL else 0)
