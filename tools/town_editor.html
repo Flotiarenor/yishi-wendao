@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>一世问道 · 城镇线路图标注工具</title>
+<style>
+  :root { --bg:#14161a; --panel:#1c1f24; --line:#2c3138; --ink:#d9d4c8; --dim:#8b8577;
+          --gold:#d8b26a; --blue:#6aa8d8; --red:#c96a6a; --green:#6cc07a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif; display:flex; height:100vh; }
+  aside { width:300px; flex:0 0 300px; background:var(--panel); border-right:1px solid var(--line);
+          padding:12px; overflow:auto; }
+  main { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:12px; overflow:auto; }
+  h1 { font-size:15px; margin:0 0 8px; color:var(--gold); }
+  h2 { font-size:12px; margin:14px 0 6px; color:var(--dim); font-weight:600; letter-spacing:.5px; }
+  .pal { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
+  .pal button { display:flex; align-items:center; gap:6px; padding:5px 7px; background:#22262c;
+                border:1px solid var(--line); border-radius:6px; color:var(--ink); cursor:pointer;
+                font-size:12px; text-align:left; }
+  .pal button:hover { border-color:var(--gold); }
+  .pal button.on { border-color:var(--gold); box-shadow:0 0 0 1px var(--gold) inset; background:#2a2f36; }
+  .sw { width:14px; height:14px; border-radius:3px; flex:0 0 14px; border:1px solid #0006; }
+  .row { display:flex; gap:6px; align-items:center; margin:6px 0; }
+  input[type=number], input[type=text], select {
+    background:#181b20; border:1px solid var(--line); color:var(--ink); border-radius:5px; padding:4px 6px; width:100%; }
+  button.act { background:#2a2f36; border:1px solid var(--line); color:var(--ink); border-radius:6px;
+               padding:6px 9px; cursor:pointer; }
+  button.act:hover { border-color:var(--gold); }
+  button.act.primary { background:#3a3222; border-color:var(--gold); color:var(--gold); }
+  canvas { background:#fff; border:1px solid var(--line); border-radius:6px; image-rendering:pixelated;
+           cursor:crosshair; touch-action:none; }
+  .hint { color:var(--dim); font-size:11.5px; line-height:1.7; }
+  pre { background:#181b20; border:1px solid var(--line); border-radius:6px; padding:8px;
+        max-height:210px; overflow:auto; font-size:11px; color:var(--dim); white-space:pre; }
+  .tag { display:inline-block; padding:0 6px; border:1px solid var(--line); border-radius:9px;
+         font-size:11px; color:var(--dim); }
+</style>
+</head>
+<body>
+<aside>
+  <h1>城镇线路图标注</h1>
+  <p class="hint">
+    <b>白 = 道路</b>，<b>黑 = 建筑（涂黑）</b>，其余是城门 / 墙 / 坊市等要素。<br>
+    鼠标拖动连续画，右键擦除。导出为字符网格 → 直接当城镇布局模板用。
+  </p>
+
+  <h2>画笔</h2>
+  <div class="pal" id="pal"></div>
+
+  <h2>画布</h2>
+  <div class="row"><label style="flex:0 0 52px">宽</label><input type="number" id="gw" value="48" min="8" max="120"></div>
+  <div class="row"><label style="flex:0 0 52px">高</label><input type="number" id="gh" value="48" min="8" max="120"></div>
+  <div class="row"><label style="flex:0 0 52px">格</label><input type="number" id="gz" value="12" min="6" max="28"></div>
+  <div class="row">
+    <button class="act" id="apply">应用尺寸</button>
+    <button class="act" id="clear">清空</button>
+  </div>
+
+  <h2>城镇信息</h2>
+  <div class="row"><label style="flex:0 0 52px">名字</label><input type="text" id="townName" value="青石镇"></div>
+  <div class="row"><label style="flex:0 0 52px">档位</label>
+    <select id="townTier">
+      <option value="core">core 核心域</option>
+      <option value="near">near 近域</option>
+      <option value="outer" selected>outer 外围域</option>
+    </select>
+  </div>
+  <div class="row"><label style="flex:0 0 52px">道路宽</label><input type="number" id="roadW" value="3" min="1" max="8"></div>
+
+  <h2>生成</h2>
+  <div class="row">
+    <button class="act" id="genStreet">十字街骨架</button>
+    <button class="act" id="genRect">环形城墙</button>
+  </div>
+  <div class="row">
+    <button class="act" id="genBlocks">街区内随机建筑</button>
+  </div>
+
+  <h2>导出</h2>
+  <div class="row">
+    <button class="act primary" id="export">生成模板 JSON</button>
+    <button class="act" id="copy">复制</button>
+  </div>
+  <pre id="out">（点「生成模板 JSON」）</pre>
+</aside>
+
+<main>
+  <canvas id="cv" width="576" height="576"></canvas>
+  <div class="hint">
+    图例：<span class="tag">. 空 / 未定</span> <span class="tag">+ 道路</span>
+    <span class="tag"># 建筑</span> <span class="tag">G 城门</span>
+    <span class="tag">= 城墙</span> <span class="tag">M 坊市</span>
+    <span class="tag">I 客栈</span> <span class="tag">L 藏经阁</span>
+    <span class="tag">R 静室</span> <span class="tag">W 水渠</span>
+    <span class="tag">T 树林</span> <span class="tag">p 广场</span>
+  </div>
+</main>
+
+<script>
+// ---------- 要素表：字符 ↔ 颜色（白=路，黑=建筑） ----------
+const KIND = {
+  ".": { name:"空 / 未定",   color:"#ffffff" },
+  "+": { name:"道路",        color:"#f2f2f2" },
+  "#": { name:"建筑（涂黑）", color:"#1b1b1b" },
+  "G": { name:"城门",        color:"#c9a227" },
+  "=": { name:"城墙",        color:"#6b6b6b" },
+  "M": { name:"坊市",        color:"#d8b26a" },
+  "I": { name:"客栈",        color:"#6aa8d8" },
+  "L": { name:"藏经阁",      color:"#a87ad8" },
+  "R": { name:"静室",        color:"#6cc07a" },
+  "W": { name:"水渠",        color:"#7fc4e8" },
+  "T": { name:"树林",        color:"#2f6b3a" },
+  "p": { name:"广场",        color:"#e8e0c0" },
+};
+const ORDER = [".", "+", "#", "G", "=", "M", "I", "L", "R", "W", "T", "p"];
+
+let W = 48, H = 48, Z = 12;
+let grid = [];
+let brush = "+";
+let drawing = false, erasing = false;
+
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+
+function blank() {
+  grid = [];
+  for (let y = 0; y < H; y++) grid.push(new Array(W).fill("."));
+}
+function resizeCanvas() {
+  cv.width = W * Z; cv.height = H * Z;
+  draw();
+}
+function paint(cx, cy) {
+  if (cx < 0 || cy < 0 || cx >= W || cy >= H) return;
+  const ch = erasing ? "." : brush;
+  if (grid[cy][cx] === ch) return;
+  grid[cy][cx] = ch;
+  drawCell(cx, cy);
+}
+function drawCell(cx, cy) {
+  const ch = grid[cy][cx];
+  const c = (KIND[ch] || KIND["."]).color;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(cx * Z, cy * Z, Z, Z);
+  if (ch !== ".") { ctx.fillStyle = c; ctx.fillRect(cx * Z + (ch === "#" ? 0 : 1), cy * Z + (ch === "#" ? 0 : 1), Z - (ch === "#" ? 0 : 2), Z - (ch === "#" ? 0 : 2)); }
+  ctx.strokeStyle = "rgba(0,0,0,.08)";
+  ctx.strokeRect(cx * Z + .5, cy * Z + .5, Z - 1, Z - 1);
+}
+function draw() {
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) drawCell(x, y);
+}
+
+// ---------- 画笔面板 ----------
+const pal = document.getElementById("pal");
+ORDER.forEach((ch) => {
+  const b = document.createElement("button");
+  b.innerHTML = `<span class="sw" style="background:${KIND[ch].color}"></span>${ch === "." ? "擦除" : ch} · ${KIND[ch].name}`;
+  b.onclick = () => { brush = ch; redrawPal(); };
+  b.dataset.ch = ch;
+  pal.appendChild(b);
+});
+function redrawPal() {
+  [...pal.children].forEach((b) => b.classList.toggle("on", b.dataset.ch === brush));
+}
+
+// ---------- 画布交互 ----------
+function cellOf(e) {
+  const r = cv.getBoundingClientRect();
+  return [Math.floor((e.clientX - r.left) / Z), Math.floor((e.clientY - r.top) / Z)];
+}
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
+cv.addEventListener("pointerdown", (e) => {
+  drawing = true; erasing = (e.button === 2) || brush === ".";
+  cv.setPointerCapture(e.pointerId);
+  const [x, y] = cellOf(e); paint(x, y);
+});
+cv.addEventListener("pointermove", (e) => { if (drawing) { const [x, y] = cellOf(e); paint(x, y); } });
+cv.addEventListener("pointerup", () => { drawing = false; erasing = false; });
+
+// ---------- 生成器 ----------
+const W2 = () => Math.max(1, parseInt(document.getElementById("roadW").value || "3", 10));
+function street() {
+  const w = W2(), cx = (W / 2) | 0, cy = (H / 2) | 0;
+  for (let y = 0; y < H; y++) for (let d = 0; d < w; d++)
+    if (cx - ((w / 2) | 0) + d >= 0 && cx - ((w / 2) | 0) + d < W) grid[y][cx - ((w / 2) | 0) + d] = "+";
+  for (let x = 0; x < W; x++) for (let d = 0; d < w; d++)
+    if (cy - ((w / 2) | 0) + d >= 0 && cy - ((w / 2) | 0) + d < H) grid[cy - ((w / 2) | 0) + d][x] = "+";
+  draw();
+}
+function rectWall() {
+  const m = 3;
+  for (let x = m; x < W - m; x++) { grid[m][x] = "="; grid[H - m - 1][x] = "="; }
+  for (let y = m; y < H - m; y++) { grid[y][m] = "="; grid[y][W - m - 1] = "="; }
+  grid[m][(W / 2) | 0] = "G"; grid[H - m - 1][(W / 2) | 0] = "G";
+  grid[(H / 2) | 0][m] = "G"; grid[(H / 2) | 0][W - m - 1] = "G";
+  // 城门到十字街的引路
+  const w = W2(), cx = (W / 2) | 0, cy = (H / 2) | 0;
+  for (let y = m; y <= cy; y++) for (let d = 0; d < w; d++) grid[y][cx - ((w / 2) | 0) + d] = "+";
+  for (let y = cy; y < H - m; y++) for (let d = 0; d < w; d++) grid[y][cx - ((w / 2) | 0) + d] = "+";
+  for (let x = m; x <= cx; x++) for (let d = 0; d < w; d++) grid[cy - ((w / 2) | 0) + d][x] = "+";
+  for (let x = cx; x < W - m; x++) for (let d = 0; d < w; d++) grid[cy - ((w / 2) | 0) + d][x] = "+";
+  draw();
+}
+function blocks() {
+  // 在"离路 ≥1 格"的空地上撒建筑（确定性伪随机，便于复现）
+  let s = 20260910;
+  const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    if (grid[y][x] !== ".") continue;
+    let nearRoad = false;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++)
+      if (grid[y + dy][x + dx] === "+") nearRoad = true;
+    if (!nearRoad && rnd() < 0.55) grid[y][x] = "#";
+  }
+  draw();
+}
+
+// ---------- 导出 ----------
+function toRows() { return grid.map((r) => r.join("")); }
+function legend() {
+  const used = new Set(grid.flat());
+  return ORDER.filter((c) => used.has(c)).map((c) => `${c} = ${KIND[c].name}`);
+}
+function exportJson() {
+  const rows = toRows();
+  const counts = {};
+  rows.forEach((r) => [...r].forEach((c) => { counts[c] = (counts[c] || 0) + 1; }));
+  const obj = {
+    name: document.getElementById("townName").value.trim() || "无名镇",
+    tier: document.getElementById("townTier").value,
+    w: W, h: H,
+    road_width: W2(),
+    legend: legend(),
+    counts,
+    rows,
+  };
+  document.getElementById("out").textContent = JSON.stringify(obj, null, 2);
+  return obj;
+}
+document.getElementById("apply").onclick = () => {
+  W = Math.max(8, Math.min(120, parseInt(document.getElementById("gw").value, 10) || 48));
+  H = Math.max(8, Math.min(120, parseInt(document.getElementById("gh").value, 10) || 48));
+  Z = Math.max(6, Math.min(28, parseInt(document.getElementById("gz").value, 10) || 12));
+  blank(); resizeCanvas();
+};
+document.getElementById("gz").onchange = () => {
+  Z = Math.max(6, Math.min(28, parseInt(document.getElementById("gz").value, 10) || 12));
+  resizeCanvas();
+};
+document.getElementById("clear").onclick = () => { blank(); draw(); };
+document.getElementById("genStreet").onclick = street;
+document.getElementById("genRect").onclick = rectWall;
+document.getElementById("genBlocks").onclick = blocks;
+document.getElementById("export").onclick = exportJson;
+document.getElementById("copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(document.getElementById("out").textContent); } catch {}
+};
+
+blank(); redrawPal(); resizeCanvas();
+</script>
+</body>
+</html>
