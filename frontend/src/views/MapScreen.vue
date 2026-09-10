@@ -32,6 +32,72 @@ const routes = ref<TravelRoute[] | null>(null);
 const routeDest = ref("");
 const planning = ref(false);
 
+// ---------- 右键：走到指定位置（T4） ----------
+/** 右键选中的世界坐标（null = 没选）；marker 画在 svg 上 */
+const ctxPoint = ref<{ x: number; y: number } | null>(null);
+const ctxRoutes = ref<TravelRoute[] | null>(null);
+const ctxDestName = ref("");
+const ctxPlanning = ref(false);
+
+/** 投影的逆：SVG 客户端坐标 → 世界坐标（里） */
+function unpx(ev: MouseEvent) {
+  const svg = ev.currentTarget as SVGSVGElement;
+  const rect = svg.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  // viewBox 是 0..SIZE 的正方形；按实际渲染尺寸等比换算（PAD 为边距）
+  const vx = ((ev.clientX - rect.left) / rect.width) * SIZE;
+  const vy = ((ev.clientY - rect.top) / rect.height) * SIZE;
+  const half = SIZE / 2 - PAD;
+  const self = mv.value?.self;
+  if (!self) return null;
+  const x = self.x + ((vx - SIZE / 2) / half) * R.value;
+  const y = self.y - ((vy - SIZE / 2) / half) * R.value;
+  return { x, y };
+}
+
+async function onMapContextMenu(ev: MouseEvent) {
+  ev.preventDefault();                       // 屏蔽浏览器右键菜单
+  const pt = unpx(ev);
+  if (!pt) return;
+  ctxPoint.value = pt;                       // 先落标记：无舆图也要看到点了哪里
+  ctxRoutes.value = null;
+  ctxDestName.value = "";
+  if (!hasMap.value) {
+    ui.notify("无舆图：不知路在何方，只能按方向摸索（手动探路）", "err");
+    return;
+  }
+  ctxPlanning.value = true;
+  try {
+    const r = await s.planTravelTo(pt.x, pt.y);
+    if (r?.ok) {
+      const d = r.data as { routes?: TravelRoute[]; dest?: { name?: string } };
+      ctxRoutes.value = d.routes || [];
+      ctxDestName.value = d.dest?.name ?? "";
+      if ((ctxRoutes.value?.length ?? 0) === 0) ui.notify("此处无路可通（绝壁 / 深海 / 禁制所阻）");
+    } else {
+      ctxRoutes.value = [];
+    }
+  } finally {
+    ctxPlanning.value = false;
+  }
+}
+
+async function goPoint(route: number) {
+  const p = ctxPoint.value;
+  if (!p) return;
+  const r = await s.planTravelTo(p.x, p.y, route);
+  if (r?.ok) {
+    ctxPoint.value = null;
+    ctxRoutes.value = null;
+  }
+}
+
+function clearCtx() {
+  ctxPoint.value = null;
+  ctxRoutes.value = null;
+  ctxDestName.value = "";
+}
+
 const DIRS = ["北", "东北", "东", "东南", "南", "西南", "西", "西北"];
 
 // ---------- SVG 投影 ----------
@@ -139,7 +205,7 @@ const kindIcon: Record<string, string> = {
     <div class="wrap">
       <!-- ---------- 左：地图 ---------- -->
       <div class="mapbox">
-        <svg :viewBox="`0 0 ${SIZE} ${SIZE}`" class="map">
+        <svg :viewBox="`0 0 ${SIZE} ${SIZE}`" class="map" @contextmenu="onMapContextMenu">
           <rect x="0" y="0" :width="SIZE" :height="SIZE" class="bg" />
           <!-- 里数网格（方位参照） -->
           <g class="grid-lines">
@@ -171,6 +237,17 @@ const kindIcon: Record<string, string> = {
             <circle :cx="px(mv?.self.x || 0, mv?.self.y || 0)[0]"
                     :cy="px(mv?.self.x || 0, mv?.self.y || 0)[1]" r="6" />
           </g>
+          <!-- 右键选中的目的地（走到指定位置） -->
+          <g v-if="ctxPoint" class="ctx">
+            <circle :cx="px(ctxPoint.x, ctxPoint.y)[0]" :cy="px(ctxPoint.x, ctxPoint.y)[1]" r="7"
+                    class="ctx-ring" />
+            <line :x1="px(mv?.self.x || 0, mv?.self.y || 0)[0]"
+                  :y1="px(mv?.self.x || 0, mv?.self.y || 0)[1]"
+                  :x2="px(ctxPoint.x, ctxPoint.y)[0]" :y2="px(ctxPoint.x, ctxPoint.y)[1]"
+                  class="ctx-line" />
+            <text :x="px(ctxPoint.x, ctxPoint.y)[0]" :y="px(ctxPoint.x, ctxPoint.y)[1] - 10"
+                  class="ctx-label">目的地</text>
+          </g>
           <!-- 方位字 -->
           <text :x="SIZE / 2" :y="16" class="dir">北</text>
           <text :x="SIZE / 2" :y="SIZE - 6" class="dir">南</text>
@@ -186,6 +263,35 @@ const kindIcon: Record<string, string> = {
                     :disabled="!s.canAct" @click="march(d)">{{ d }}</button>
           </div>
         </div>
+
+        <!-- 右键目的地：候选路径（与城镇同一个引擎管线） -->
+        <div v-if="ctxPoint" class="ctxpanel">
+          <div class="ctxhd">
+            <span class="dim" style="font-size: 12px">
+              右键目的地（{{ Math.round(ctxPoint.x).toLocaleString() }},
+              {{ Math.round(ctxPoint.y).toLocaleString() }}）
+              <template v-if="ctxDestName"> · 近【{{ ctxDestName }}】</template>
+            </span>
+            <button class="btn mini" @click="clearCtx">取消</button>
+          </div>
+          <div v-if="ctxPlanning" class="dim" style="font-size: 12px">推演路径…</div>
+          <div v-else-if="hasMap && (ctxRoutes?.length ?? 0) === 0" class="dim" style="font-size: 12px">
+            此处无路可通（绝壁 / 深海 / 禁制所阻），或已在你脚下。
+          </div>
+          <div v-else-if="ctxRoutes" class="routes">
+            <div class="dim" style="font-size: 12px">选一条路走：</div>
+            <button v-for="r in ctxRoutes" :key="'c' + r.idx" class="route" :disabled="!s.canAct"
+                    @click="goPoint(r.idx)">
+              <span class="rlabel">{{ r.label }}</span>
+              <span class="rdays">{{ r.days }} 日</span>
+              <span class="rmeta mono">
+                {{ Math.round(r.li).toLocaleString() }} 里 ｜
+                路网 {{ Math.round(r.road_share * 100) }}% ｜
+                险地 {{ Math.round(r.danger_share * 100) }}%
+              </span>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- ---------- 右：选中详情 / 候选路径 ---------- -->
@@ -196,7 +302,8 @@ const kindIcon: Record<string, string> = {
           </template>
           <template v-else>
             点击地图上的<span class="k tw-dot">圆点</span>（城镇）或
-            <span class="k pt-dot">小点</span>（内容点）查看详情并前往。
+            <span class="k pt-dot">小点</span>（内容点）查看详情并前往；
+            <b>右键任意位置</b>＝直接走到那里。
             <template v-if="!detailed">（粗舆图只标城镇；换详图可看到灵草/矿脉/兽巢等）</template>
           </template>
         </p>
@@ -289,6 +396,13 @@ const kindIcon: Record<string, string> = {
 .pt.unknown { fill: var(--ink-dim); opacity: .5; }
 .pt.sel { stroke: var(--red); stroke-width: 2; }
 .me circle { fill: #fff; stroke: var(--gold); stroke-width: 2.5; }
+/* 右键目的地标记 */
+.ctx-ring { fill: none; stroke: var(--red); stroke-width: 2; stroke-dasharray: 3 3; }
+.ctx-line { stroke: var(--red); stroke-width: 1; opacity: .45; stroke-dasharray: 4 4; }
+.ctx-label { fill: var(--red); font-size: 11px; text-anchor: middle; }
+.ctxpanel { display: flex; flex-direction: column; gap: 6px; background: var(--panel3);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.ctxhd { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .dir { fill: var(--ink-dim); font-size: 12px; text-anchor: middle; opacity: .7; }
 .march { display: flex; flex-direction: column; gap: 6px; }
 .dirs { display: flex; flex-wrap: wrap; gap: 5px; }

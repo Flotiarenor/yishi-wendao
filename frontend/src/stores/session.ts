@@ -275,6 +275,19 @@ export const useSessionStore = defineStore("session", {
       } else if (resp.game_over) {
         ui.notify("【道陨】本世已终，可「新建一世」或读档。", "err");
       }
+      // 2b) T4 迷雾：神识新记入舆图的内容点（结构化字段，UI 只读 data 不解析 text）
+      const disc = resp.data?.newly_discovered as
+        | { name: string; kind_name?: string }[]
+        | undefined;
+      if (Array.isArray(disc) && disc.length > 0) {
+        const head = disc[0];
+        ui.notify(
+          disc.length === 1
+            ? `神识察觉${head.kind_name ?? ""}【${head.name}】，已记入舆图`
+            : `神识察觉 ${disc.length} 处（含${head.kind_name ?? ""}【${head.name}】），已记入舆图`,
+          "info",
+        );
+      }
       // 3) 状态（引擎拒绝分支不带 state → 保持原状态，但仍需给出反馈）
       if (resp.state) this.state = resp.state;
       // 战斗：中置覆盖层（方便点击）；战斗结束后自动收起，主内容区保持不变，
@@ -343,6 +356,15 @@ export const useSessionStore = defineStore("session", {
     async travelRoute(site: string, route: number) {
       const r = await this.run(...actions.travelGo(site, route));
       if (r?.ok) this.afterMove();
+      return r;
+    },
+    /**
+     * 坐标目的地（地图右键"走到那里"）——与地名目的地共用同一条寻路管线。
+     * `route` 省略 = **只预览候选**（引擎纯查询，不推进时间、不移动）。
+     */
+    async planTravelTo(x: number, y: number, route?: number) {
+      const r = await this.run(...actions.travelToPoint(x, y, route));
+      if (r?.ok && route !== undefined) this.afterMove();
       return r;
     },
     /** 无舆图手动探路 */

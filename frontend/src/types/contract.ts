@@ -99,8 +99,10 @@ export interface MapPoint {
   x: number;
   y: number;
   dist_li: number;
-  /** 视野内或已发现 */
+  /** 视野内或已发现（T4 口径：`discovered` ∪ 此刻神识视野内） */
   known: boolean;
+  /** T4：已知的来源——discovered（走过/记档）｜ vision（此刻视野内）｜ ""（未探明） */
+  known_by?: "discovered" | "vision" | "";
 }
 
 export interface MapView {

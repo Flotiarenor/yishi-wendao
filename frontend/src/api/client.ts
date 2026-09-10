@@ -149,6 +149,9 @@ export const actions = {
   travel: (site: string) => ["travel", { site }] as const,
   /** 执行第 N 条候选（不带 route 时只返回候选，不推进时间） */
   travelGo: (site: string, route: number) => ["travel", { site, route }] as const,
+  /** 坐标目的地（地图右键"走到那里"）：不带 route = 预览候选，带 route = 执行 */
+  travelToPoint: (x: number, y: number, route?: number) =>
+    ["travel", route === undefined ? { x, y } : { x, y, route }] as const,
   /** 无舆图手动探路（八方向） */
   march: (direction: string) => ["march", { direction }] as const,
   explore: (site: string) => ["explore", { site }] as const,
