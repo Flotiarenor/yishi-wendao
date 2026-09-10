@@ -12,6 +12,10 @@
   - "chronicle" 查看大事记
   - "age_pass" {days} 静养度日
   - "travel" {site} 前往地点   "explore" {site} 探索
+  - "travel" {site}（不带 route）= **只看候选路径**（不推进时间、不移动）
+  - "travel" {site, route=N} = 执行第 N 条候选（按路径真实耗时结算，P4-T3）
+  - "march" {direction} 无舆图**手动探路**（八方向直线推进，遇硬阻挡/水域停下，P4-T3）
+  - "debug" {key, amount} 调试发资源（**默认关闭**，见 engine/debug.py；P4-T3）
   - "market" 坊市货单          "buy" {item,qty} 购买（丹药/功法）
   - "use_pill" {item} 服用丹药
   - "learn" {gongfa,slot} 装备功法入运转池槽位  "forget" {slot} 卸下

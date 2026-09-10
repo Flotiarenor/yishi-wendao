@@ -26,9 +26,10 @@ from engine import settings as S
 from engine.game import Game, Result
 
 # 消耗时间/资源的动作先存节点
+# （`debug` 也算：它直接改玩家资源，测试时用 undo 退回去比手改存档方便）
 RISKY_ACTIONS = frozenset({
     "cultivate", "breakthrough", "age_pass", "travel",
-    "explore", "buy", "use_pill", "comprehend",
+    "explore", "buy", "use_pill", "comprehend", "debug", "march",
 })
 
 
