@@ -3,7 +3,7 @@
 用法（在项目根目录执行，用虚拟环境的 python）：
 
     python main.py                        # 默认：起 Web 壳，浏览器玩
-    python main.py web [--host H --port P]
+    python main.py web [--host H --port P] [--debug [--stones N]]
     python main.py smoke [--lives 20] [--log]     # 自动 bot 回归
     python main.py test                            # 跑全部测试（单测 + 冒烟）
     python main.py check [--strict]                # content/ 数据校验（开发期）
@@ -29,9 +29,16 @@ USAGE = """一世问道 · 文字修仙 —— 统一入口
 
   python main.py                  起 Web 壳（默认，浏览器打开 http://127.0.0.1:8044）
   python main.py web [--port N]   同上（可指定端口）
+  python main.py web --debug [--stones N]   开发调试模式：新局自动发灵石（默认 999999）
   python main.py smoke [--lives N] [--log]   自动 bot 回归（记录分布与战斗统计）
   python main.py test             跑全部测试（时间轴/动作/战斗/加固/内容工具 + 冒烟）
   python main.py check [--strict]  content/ 数据校验（id/引用/取值；--strict 警告也失败）
+
+调试模式（--debug）说明：
+  - 新局自动发灵石（默认 999999）；也可用 `python main.py web --debug --stones 5000` 指定。
+  - 开局后仍可随时补：step("debug", key="stones"/"pills"/"map"/"fam"/"qi")。
+  - 等价开关：环境变量 XIUXIAN_DEBUG=1（可选 XIUXIAN_DEBUG_STONES=N）。
+  - **只用于开发联调**：它会把你的存档变得与正式基线不可比（smoke/指纹口径）。
 
 开发期工具（python -m tools.<名>，详见 tools/）：
   gen_skill  技能生成器（draft → 校验 → content/skills.py 代码 / JSON）

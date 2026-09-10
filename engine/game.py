@@ -57,6 +57,7 @@ from content import regions as R
 from content import sites as ST
 from content import skills as SK
 from engine import battle as BTL
+from engine import debug as DBG             # P4-T3：开发期调试开关（默认关）
 from engine import worldmap as WM          # P4-T3：世界地图内核（连续坐标 / 代价场 / 寻路）
 from engine.clock import LI as LI_PER_SI   # 1 息 = 100 厘息（P4：战斗耗时接回世界轴）
 from engine.rng import Rng
@@ -123,6 +124,9 @@ R_ROUTE_INVALID = "route_invalid"    # 候选序号越界 / 该档位未开放
 R_NO_PATH = "no_path"                # 寻路失败（被屏障阻断）
 R_MARCH_BLOCKED = "march_blocked"    # 手动探路遇阻停下（硬阻挡 / 水域）
 R_DIRECTION_INVALID = "direction_invalid"
+# 调试（engine/debug.py；默认关闭）
+R_DEBUG_DISABLED = "debug_disabled"  # 未开 --debug 时拒所有 debug 动作
+R_DEBUG_KEY = "debug_key"            # 未知的调试项目
 
 
 @dataclass
@@ -476,6 +480,11 @@ class Game:
             self._set_pos(*R.LEGACY_ANCHORS.get(ST.name_of(ST.SHISHI),
                                                 R.CORE_DOMAIN_CENTER))
             p.location = ST.SHISHI
+            # 出生地记入 places。**不建世界**：先记锚点名（"坊市"），
+            # 首次真正需要显示真实城镇名时由 `place_name()` 懒填充成"青石镇"。
+            _bx, _by = self.pos()
+            _bcx, _bcy = WM.cell_of(_bx, _by)
+            self.state.world.places["place:%d" % (_bcy * WM._N + _bcx)] = ST.name_of(ST.SHISHI)
             # 开局灵气 = 当前境界灵气池上限（否则所有技能都因 low_qi 放不出来）
             p.qi = float(BTL.battle_stats(p.realm_idx)["qi_max"])
             self.state.chronicle.add(
@@ -491,6 +500,12 @@ class Game:
         self._checkpoint = None  # 节点回溯快照
         self._active_battle = None  # 战斗会话（运行时状态，不入存档）
         self._route_memo = {}    # (起点,终点,档位,境界,舆图档) → 候选路径（纯缓存，不入存档）
+        self._map_memo = {}      # (坐标,舆图档,境界,已发现数) → map_view 结果（纯缓存）
+        # 调试：新局自动发资源（只在 `--debug` 时挂上，见 engine/debug.py）
+        if DBG.enabled():
+            _cfg = DBG.pending()
+            if _cfg is not None:
+                self.apply_debug(_cfg)
 
     # ---------- 旧档迁移 ----------
     def _migrate_state(self, had_gongfa: bool = False, legacy_gongfa: bool = False,
@@ -532,6 +547,9 @@ class Game:
         if not (had_world and self.state.world.world_seed):
             self.state.world = WM.WorldState.legacy(
                 int(self.seed), location=ST.name_of(p.location))
+            _lx, _ly = self.pos()
+            _lcx, _lcy = WM.cell_of(_lx, _ly)
+            self.state.world.places["place:%d" % (_lcy * WM._N + _lcx)] = ST.name_of(p.location)
         # 功法栏（P3）：旧档无新字段 → 主修迁入领悟池 / 无主修补吐纳诀
         if legacy_gongfa:
             old_main = p.main_gongfa
@@ -663,6 +681,9 @@ class Game:
                              profile=(str(kw.get("profile", "")) or None))
         elif action == "march":
             r = self._march(str(kw.get("direction", "") or kw.get("dir", "")))
+        elif action == "debug":
+            r = self._debug(str(kw.get("key", "") or kw.get("grant", "")),
+                            _as_int(kw.get("amount", 0), 0))
         elif action == "explore":
             r = self._explore(str(kw.get("site", "")))
         elif action == "buy":
@@ -731,25 +752,43 @@ class Game:
         移动本身已经付过这个成本，落地时多算一次 ≈ 1 ms；若放进 `state_data()`
         就会让**每次状态快照**都触发世界生成（实测把 `/api/new` 拖到 2.8~4 s）。
         结果存进 `WorldState.places`（键 `place:<格序号>`），状态快照 O(1) 读取。
+
+        例外：**旧地点锚点不建世界就直接记名**（坊市/灵脉山/幽谷秘境/古战场遗迹/上古洞府），
+        这样"旧地点之间互访"这条快捷路径不会被拖成一次 6 秒世界生成。
         """
         self._set_pos(x, y)
         cx, cy = WM.cell_of(x, y)
-        name = self._place_name(x, y)
+        name = None
+        for nm in R.LEGACY_ANCHORS:
+            ax, ay = R.LEGACY_ANCHORS[nm]
+            if math.hypot(ax - x, ay - y) <= 60.0:
+                name = nm
+                break
+        if name is None:
+            name = self._place_name(x, y)
         self.state.world.places["place:%d" % (cy * WM._N + cx)] = name
         self._sync_location()
 
     def place_name(self) -> str:
-        """当前位置的显示名（城镇名 / 野外 / 旧地点名）——读缓存，不建世界。"""
+        """当前位置的显示名（城镇名 / 旧地点名 / 野外）——读缓存，**不建世界**。
+
+        缓存未命中且只落到"野外"时，才去算一次城镇名（需世界，≈1 ms + 首次生成）；
+        因为"野外"多半意味着附近真没城镇，也算给下次留个准值。
+        旧地点锚点（坊市/灵脉山…）不建世界即可判定，恰好覆盖开局与探索点——故开局零成本。
+        """
         x, y = self.pos()
         cx, cy = WM.cell_of(x, y)
         hit = self.state.world.places.get("place:%d" % (cy * WM._N + cx))
         if hit:
             return hit
-        # 未走过的地方：坐标在旧地点锚点附近就报锚点名，否则"野外"
         for nm in R.LEGACY_ANCHORS:
             ax, ay = R.LEGACY_ANCHORS[nm]
             if math.hypot(ax - x, ay - y) <= 60.0:
                 return nm
+        t = self._near_town(x, y)
+        if t is not None:
+            self.state.world.places["place:%d" % (cy * WM._N + cx)] = t.name
+            return t.name
         return "野外"
 
     def _place_name(self, x: float, y: float) -> str:
@@ -1012,6 +1051,165 @@ class Game:
                   f"（{pick['li']:.0f} 里）抵达【{name}】。")
         self.state.chronicle.add(p.age_years, f"自别处动身，{pick['days']} 日后抵【{name}】。")
         return _accept(r, r.text, r.data)
+
+    # ===== 调试（engine/debug.py；默认关闭，见该模块说明）=====
+    def apply_debug(self, cfg=None) -> dict:
+        """按调试配置直接发资源（**不进存档逻辑、不改世界**）。返回发了什么。
+
+        典型用法（新局自动发）：`Game(debug_cfg=...)` 或建会话时调用。
+        """
+        if cfg is None:
+            return {}
+        p = self.state.player
+        granted = {}
+        if cfg.stones:
+            p.add_stones(int(cfg.stones))
+            granted["stones"] = int(cfg.stones)
+        for pid, qty in (cfg.pills or {}).items():
+            p.add_item(pid, int(qty))
+            granted["pills"] = granted.get("pills", 0) + 1
+        if cfg.map_level:
+            self.state.world.map_level = str(cfg.map_level)
+            granted["map_level"] = str(cfg.map_level)
+        if cfg.full_fam:
+            n = 0
+            for gid in list(p.owned_gongfa or []):
+                if p.familiarity.get(gid, 0) < S.FAM_MAX:
+                    p.familiarity[gid] = S.FAM_MAX
+                    n += 1
+            granted["fam_set"] = n
+        return granted
+
+    def _debug(self, key: str, amount: int = 0) -> Result:
+        """调试动作（`step("debug", key=…)`）。**默认关闭 → `debug_disabled`。**"""
+        r = Result()
+        if not DBG.enabled():
+            return _reject(r, R_DEBUG_DISABLED,
+                           "调试模式未开启。启动加 --debug，或设 XIUXIAN_DEBUG=1。")
+        p = self.state.player
+        key = str(key or "").strip().lower()
+        if key in ("stones", "stone", "灵石"):
+            n = int(amount) if amount else DBG.DEFAULT_STONES
+            p.add_stones(n)
+            return _accept(r, f"[调试] 灵石 +{n}（现有 {p.spirit_stones}）。",
+                           {"debug": True, "key": "stones", "amount": n,
+                            "spirit_stones": p.spirit_stones})
+        if key in ("pills", "pill", "丹药"):
+            from content import pills as _P
+            n = int(amount) if amount else 5
+            for pid in _P.PILLS:
+                p.add_item(pid, n)
+            return _accept(r, f"[调试] 每种丹药 +{n}。",
+                           {"debug": True, "key": "pills", "amount": n,
+                            "kinds": len(_P.PILLS)})
+        if key in ("map", "舆图", "map_level"):
+            lvl = "detailed" if (amount or 0) != 0 else "coarse"
+            self.state.world.map_level = lvl
+            return _accept(r, f"[调试] 舆图档 → {lvl}。",
+                           {"debug": True, "key": "map", "map_level": lvl})
+        if key in ("fam", "熟悉度"):
+            n = 0
+            for gid in list(p.owned_gongfa or []):
+                p.familiarity[gid] = S.FAM_MAX
+                n += 1
+            return _accept(r, f"[调试] {n} 本功法熟悉度拉满。",
+                           {"debug": True, "key": "fam", "count": n})
+        if key in ("qi", "灵气"):
+            p.qi = float(BTL.battle_stats(p.realm_idx)["qi_max"])
+            return _accept(r, f"[调试] 灵气回满（{p.qi:.0f}）。",
+                           {"debug": True, "key": "qi", "qi": p.qi})
+        return _reject(r, R_DEBUG_KEY,
+                       "未知调试项。可用：stones / pills / map / fam / qi。")
+
+    def _vision_tid(self) -> int:
+        """玩家所在格的地形 id（用于视野地形遮蔽）。**会触发世界生成。**"""
+        cx, cy = WM.cell_of(*self.pos())
+        return self.wmap.terrain_at_cell(cx, cy)
+
+    def _in_vision(self, px: float, py: float, x: float, y: float, realm: int) -> bool:
+        """内容点是否在神识视野内（半径 × 地形遮蔽，按**玩家所在地形**计，与 data 层一致）。"""
+        wm = self.wmap
+        vis = wm.vision_radius(realm, self._vision_tid())
+        return math.hypot(px - x, py - y) <= vis
+
+    # ===== 地图信息出口（T4 迷雾的前置；P4-T3 后补：UI 要显示真实地图）=====
+    def map_view(self, radius_li: float = None) -> dict:
+        """当前位置周边的地图信息（**按舆图档下发**，定案 §5）。
+
+        | 舆图档 | 下发内容 |
+        |---|---|
+        | `none`   | 只有自身坐标（无舆图 = 两眼一抹黑） |
+        | `coarse` | 周边**城镇**（名字 / 方位 / 里程 / 是否曾到过） |
+        | `detailed` | 再加**内容点**（视野内 + 已知）与**河流大势** |
+
+        内容点分三档可见性（T4 会把"已知"接成真机制，现在 `discovered` 已就位）：
+        ① 神识视野内（随境界，地形遮蔽）；② `world.discovered` 里记着的；③ 其余不给。
+
+        ⚠️ 本方法**会触发世界生成**（首次 ≈6 s），故只在需要时调；结果按
+        (坐标, 舆图档, 境界, discovered 版本) 缓存，状态快照不会反复触发。
+        """
+        lvl = str(self.state.world.map_level or "none")
+        x, y = self.pos()
+        rad = float(radius_li if radius_li is not None else S.MAP_VIEW_RADIUS_LI)
+        realm = int(self.state.player.realm_idx)
+        disc = self.state.world.discovered
+        key = (round(x, 1), round(y, 1), lvl, realm, len(disc), rad)
+        hit = self._map_memo.get(key)
+        if hit is not None:
+            return hit
+        out = {
+            "self": {"x": x, "y": y, "name": self.place_name()},
+            "map_level": lvl,
+            "radius_li": rad,
+            "vision_li": round(self.wmap.vision_radius(realm, self._vision_tid()), 1),
+            "towns": [], "points": [], "rivers": [], "counts": {},
+        }
+        if lvl == "none":
+            # 无舆图：只给自身坐标（"两眼一抹黑"，定案 §5）
+            out["counts"] = {"towns": 0, "points": 0, "known_points": 0, "rivers": 0}
+            self._map_memo.clear()
+            self._map_memo[key] = out
+            return out
+        wm = self.wmap
+        _scx, _scy = WM.cell_of(x, y)
+        for t in wm.towns:
+            d = math.hypot(t.x - x, t.y - y)
+            if d > rad:
+                continue
+            _tcx, _tcy = WM.cell_of(t.x, t.y)
+            out["towns"].append({
+                "id": t.id, "name": t.name, "x": round(t.x, 1), "y": round(t.y, 1),
+                "dist_li": round(d, 1), "is_main": bool(t.is_main),
+                "tier": t.tier, "radius_li": round(wm.town_radius(t), 1),
+                "visited": ("place:%d" % (_tcy * WM._N + _tcx)) in self.state.world.places,
+                "here": (abs(_tcx - _scx) <= 1 and abs(_tcy - _scy) <= 1),
+            })
+        out["towns"].sort(key=lambda q: (q["dist_li"], q["id"]))
+        if lvl == "detailed":
+            vis = wm.vision_radius(realm, self._vision_tid())
+            for p in wm.content_points:
+                d = math.hypot(p.x - x, p.y - y)
+                if d > rad:
+                    continue
+                known = p.id in disc or self._in_vision(p.x, p.y, x, y, realm)
+                out["points"].append({
+                    "id": p.id, "kind": p.kind, "name": p.name,
+                    "element": p.element, "x": round(p.x, 1), "y": round(p.y, 1),
+                    "dist_li": round(d, 1), "known": bool(known),
+                    # 未知点：只给"有此一处"的轮廓，名字与归属留白（T4 迷雾语义）
+                    "name_shown": p.name if known else "（未探明）",
+                })
+            out["points"].sort(key=lambda q: (not q["known"], q["dist_li"], q["id"]))
+            for rv in wm.rivers:
+                for (rx, ry) in rv.points[::S.MAP_RIVER_STRIDE]:
+                    if math.hypot(rx - x, ry - y) <= rad:
+                        out["rivers"].append([round(rx, 1), round(ry, 1)])
+        out["counts"] = {"towns": len(out["towns"]), "points": len(out["points"]),
+                         "known_points": sum(1 for q in out["points"] if q["known"]),
+                         "rivers": len(out["rivers"])}
+        self._map_memo.clear()
+        self._map_memo[key] = out
+        return out
 
     def _route_limit(self) -> int:
         """按舆图档位决定给几条候选（定案 §5：无舆图 / 粗舆图 / 详图）。"""
@@ -2082,6 +2280,7 @@ class Game:
             "location": {"id": p.location, "name": self.place_name(),
                          "x": self.pos()[0], "y": self.pos()[1],
                          "map_level": self.state.world.map_level},
+            "map": self.map_view(),
             "inventory": [{"id": pid, "name": P.name_of(pid), "qty": qty}
                           for pid, qty in p.inventory.items()],
             "pool": {

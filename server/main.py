@@ -17,6 +17,10 @@ def parse_args(argv=None):
     ap = argparse.ArgumentParser(description="仙途文字修仙 · Web 壳（FastAPI）")
     ap.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
     ap.add_argument("--port", type=int, default=8044, help="监听端口（默认 8044）")
+    ap.add_argument("--debug", action="store_true",
+                    help="开发调试模式：新局自动发灵石/丹药，并开放 step('debug') 动作")
+    ap.add_argument("--stones", type=int, default=None,
+                    help="配合 --debug：新局发放的灵石数（默认 999999）")
     return ap.parse_args(argv)
 
 
@@ -51,6 +55,16 @@ def main(argv=None):
     if _port_in_use(args.host, args.port):
         print(f"⚠ {_free_port_hint(args.port)}")
         return 1
+    if args.debug or args.stones is not None:
+        # 调试模式：进程级开关 + "新局自动发资源"配置（见 engine/debug.py）
+        from engine import debug as DBG
+        DBG.enable(stones=(args.stones if args.stones is not None else DBG.DEFAULT_STONES))
+        print(f"⚠ 调试模式已开启（--debug）：新局自动发 {DBG.peek_pending().stones} 灵石，"
+              f"并可用 step('debug', key=…) 随时补资源。**勿在正式游玩时使用**")
+    else:
+        from engine import debug as DBG
+        if DBG.sync_from_env():
+            print(f"⚠ 调试模式已开启（XIUXIAN_DEBUG）：新局自动发 {DBG.DEFAULT_STONES} 灵石")
     print(f"仙途文字修仙 · 浏览器访问: http://{args.host}:{args.port}  （Ctrl+C 退出）")
     app = build_app()
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

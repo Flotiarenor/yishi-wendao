@@ -163,6 +163,8 @@ TRAVEL_PROFILES = ("fastest", "safe", "stealth")   # 候选路径档位（详图
 NEAR_MOVE_LI = 60.0               # 近距移动阈值（里）：同一聚落内挪动不走世界寻路
 NEAR_MOVE_DAYS = 0.5              # 近距移动耗时（日）——同一聚落内挪动，**不建世界**
 MARKET_RADIUS_LI = 120.0          # 坊市判定半径（里）：距坊市锚点在此内即算"身处坊市"
+MAP_VIEW_RADIUS_LI = 4000.0       # 地图信息下发半径（里）= 1 个域：粗舆图/详图都按此给周边
+MAP_RIVER_STRIDE = 3              # 下发河流大势时的抽稀步长（点太多只传轮廓）
 
 # 小境界突破耗灵石 = 基准 + 档号系数（随境界上涨，防止无脑冲）
 BREAKTHROUGH_STONE_COST = 10

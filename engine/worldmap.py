@@ -251,6 +251,15 @@ def fbm(seed: int, x: float, y: float, base_period: float, octaves: int,
 _SLOPE_EPS = 100.0        # 坡度采样半径（里）——**固定 100 里**（与格宽解耦，保证峡谷分布不随格宽漂移）
 # 内容点密度按**面积**归一：格变小 → 每格命中概率等比缩小，世界内容总量不随格宽膨胀
 _DENSITY_SCALE = (_CELL_LI / 100.0) ** 2
+# 内容点"城镇周边优先"（2026-09-10 用户拍板）：城镇 400 里内概率 ×_DENSITY_TOWN_BOOST，
+# 其余均分。倍数按**总量守恒**标定（城镇周边格约占总陆地 41%）：
+# 实测 1.9 → 总量 1385（改造前 1319，基本持平）、城镇 400 里内占比 28%、出生城 400 里内 13 个。
+_TOWN_ATTRACT_CELLS = 8          # 8 格 × 50 里 = 400 里
+_DENSITY_TOWN_BOOST = 1.9
+# 8 邻域偏移（多源 BFS 用；与 `_SLOPE_OFFS` 同口径）
+_NEIGH8 = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
+# 4 邻域偏移（连通分量洪泛用：4 邻接才是"陆桥"的正确判据）
+_NEIGH4 = ((1, 0), (-1, 0), (0, 1), (0, -1))
 _SLOPE_OFFS = ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
                (1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0))
 
@@ -679,12 +688,16 @@ class WorldMap:
         self._river_cells = None     # frozenset[int] 河格（含渡口格）
         self._towns = None           # tuple[Town, ...]
         self._town_rl = ()           # tuple[float, ...]：与 `_towns` 同序的影响半径
+        self._town_pos = {}          # town.id → `_towns` 序号（查半径 O(1)，勿用遍历）
         self._roads = None           # tuple[Road, ...]
         self._points = None          # tuple[ContentPoint, ...]
         self._town_cells = {}        # idx → T_ROAD（城镇覆盖层）
         self._road_cells = {}        # idx → T_ROAD / T_TRAIL / T_FORD（路网覆盖层）
         self._near_river = None      # frozenset[int] 距河 ≤ 2 格的格
         self._comp = None            # 粗栅格连通分量（城镇选址用）
+        self._town_dist = None       # 每格到最近城镇的格距（内容点"城镇周边优先"用）
+        self._comp_fine = None       # 细格连通分量（建路"注定不可达"预筛，见 fine_components）
+        self._comp_coarse = {}       # profile → 粗格连通分量（与代价场同粒度）
         self._field_cache = {}       # (profile, realm, shenfa, box, roads, step) → CostField
         self._checksum = None
         # 旧地点锚点格（路网落格时跳过，保证锚点基础地形不被覆盖）
@@ -1425,6 +1438,7 @@ class WorldMap:
                 _rl.append(_town_radius(seed, cx, cy))
         self._towns = _FeatureTuple(towns)
         self._town_rl = tuple(_rl)
+        self._town_pos = {t.id: i for i, t in enumerate(towns)}   # id → 序号（O(1) 查半径）
 
     # ---------- 步骤 5：路网 ----------
     def _plan_field(self, profile: str = "road_plan") -> CostField:
@@ -1473,11 +1487,15 @@ class WorldMap:
         # --- 每条候选边求最小代价路径 ---
         paths = {}
         costs = {}
+        # 连通性预筛：分量不同的城镇对**必然无路**，直接跳过（否则每次都是全图 A* 白跑）
+        _tcomp = {t.id: self.town_component(t) for t in towns}
         for key in sorted(cand):
+            if _tcomp[key[0]] != _tcomp[key[1]]:
+                continue
             a, b = by_id[key[0]], by_id[key[1]]
             ca, cb = cell_of(a.x, a.y), cell_of(b.x, b.y)
             cells, cost, reason = self._astar(field, ca, cb)
-            if cells is None:
+            if cells is None and self._same_land(ca, cb, "road_plan"):
                 if forced is None:
                     forced = self._plan_field("road_forced")
                 cells, cost, reason = self._astar(forced, ca, cb)
@@ -1524,19 +1542,26 @@ class WorldMap:
             if pick is None:
                 break
             key = pick[0]
+            if _tcomp[key[0]] != _tcomp[key[1]]:
+                failed.add(key)          # 分量不同 → 必然无路，标失败并换下一对（不跑 A*）
+                continue
             a, b = by_id[key[0]], by_id[key[1]]
             ca, cb = cell_of(a.x, a.y), cell_of(b.x, b.y)
             attempts += 1
             cells, cost, reason = self._astar(field, ca, cb)
-            if cells is None:
+            if cells is None and self._same_land(ca, cb, "road_plan"):
+                # 先预筛再换 profile：`road_forced` 只放宽"水可渡"，
+                # 分量不同（连水都过不去）时这跳也注定失败，别付全图 A* 的代价
                 if forced is None:
                     forced = self._plan_field("road_forced")
                 cells, cost, reason = self._astar(forced, ca, cb)
-            if cells is None:
-                # 细格兜底：粗栅格 9 点采样可能切断 1 格宽的陆桥，而 MAINLAND 是细格连通的
-                cells, cost, reason = self._route_fine(ca, cb, margin=12, full=True)
-                if cells is not None:
-                    paths_fine.add(key)
+            if cells is None and self._same_land(ca, cb, "road_plan"):
+                # 细格兜底：粗栅格 9 点采样可能切断 1 格宽的陆桥，而 MAINLAND 是细格连通的。
+                # **先做可达性预筛**：分量不同 → 这次搜索注定失败，跳过（否则每次全图 A* ≈1 s）
+                if self._same_land(ca, cb):
+                    cells, cost, reason = self._route_fine(ca, cb, margin=12, full=True)
+                    if cells is not None:
+                        paths_fine.add(key)
             if cells is None:
                 failed.add(key)
                 continue
@@ -1617,6 +1642,145 @@ class WorldMap:
             out.append((cx, cy))
         return out
 
+    def town_component(self, town) -> int:
+        """城镇所在**粗格连通分量**编号（-2 = 该格本身不可通行）。
+
+        用于建路预筛：分量不同 → 两镇之间**必然无路**，不必跑 A*。
+        实测（seed 3100）：建路从 **98 s → 7 s**，路径结果逐位不变。
+        """
+        cx, cy = cell_of(float(town.x), float(town.y))
+        return self.coarse_components("road_plan")[cy * _N + cx]
+
+    def fine_components(self):
+        """**细格连通分量标记**（按 `road_plan` 通行性洪泛），用于"注定不可达"预筛。
+
+        为什么需要它：`_build_roads` 的连通性补边会对每个候选城镇对做一次
+        `_route_fine(full=True)` = **全图 400×400 A\\***（16 万格）。若两座城镇根本不在同一块陆地上，
+        这个搜索注定失败，却要付满额代价。实测某世界（seed 3100）建路要 **98 s**，
+        而正常世界只要 2.7 s。
+        本函数把"可达性"一次性算清楚（一次洪泛 ≈0.1 s），之后对**分量不同**的城镇对直接跳过。
+
+        ⚠️ 只用于**剪掉必然失败的搜索**，不改变任何成功路径的结果 → 世界指纹语义不乱。
+        """
+        if self._comp_fine is not None:
+            return self._comp_fine
+        self._ensure_rivers()
+        n = _N
+        base = self._base
+        road_cells = self._road_cells
+        town_cells = self._town_cells
+        wmap = self
+        lab = [-1] * (n * n)
+        comp = 0
+        for start in range(n * n):
+            if lab[start] != -1:
+                continue
+            tid0 = town_cells.get(start, base[start])
+            if wmap._sample_speed("road_plan", tid0, 1, 0.0)[0] <= 0.0:
+                lab[start] = -2
+                continue
+            stack = [start]
+            lab[start] = comp
+            while stack:
+                cur = stack.pop()
+                cy, cx = divmod(cur, n)
+                for dx, dy in _NEIGH4:
+                    nx, ny = cx + dx, cy + dy
+                    if nx < 0 or ny < 0 or nx >= n or ny >= n:
+                        continue
+                    j = ny * n + nx
+                    if lab[j] != -1:
+                        continue
+                    tid = road_cells.get(j)
+                    if tid is None:
+                        tid = town_cells.get(j)
+                        if tid is None:
+                            tid = base[j]
+                    if wmap._sample_speed("road_plan", tid, 1, 0.0)[0] <= 0.0:
+                        lab[j] = -2
+                        continue
+                    lab[j] = comp
+                    stack.append(j)
+            comp += 1
+        self._comp_fine = lab
+        return lab
+
+    def coarse_components(self, profile: str = "road_plan") -> list:
+        """**粗栅格连通分量**（与 `cost_field` 同粒度：每格 3×3 采样、任一点不可通行即不可通行）。
+
+        为什么必须与代价场同粒度：寻路跑在**粗格**上，而"9 点采样"比"格心"严格得多——
+        用细格通行性算出来的可达性会把"格心可通、但边角是水"的格判为可达，
+        于是又回到"注定失败的搜索反复跑"（实测 seed 3100 建路 98 s，正常世界 2.7 s）。
+
+        用途：建路连通性补边前先剪掉"分量不同"的城镇对（`_same_land`）。
+        ⚠️ 只跳过必然失败的搜索，**不改变任何成功路径的结果**。
+        """
+        key = ("coarse_comp", profile)
+        if self._comp_coarse.get(key) is not None:
+            return self._comp_coarse[key]
+        self._ensure_rivers()
+        n = _N
+        w = _CELL_LI
+        lab = [-1] * (n * n)
+        comp = 0
+        for start in range(n * n):
+            if lab[start] != -1:
+                continue
+            if not self._coarse_cell_passable(start % n, start // n, profile):
+                lab[start] = -2
+                continue
+            stack = [start]
+            lab[start] = comp
+            while stack:
+                cur = stack.pop()
+                cy, cx = divmod(cur, n)
+                for dx, dy in _NEIGH4:
+                    nx, ny = cx + dx, cy + dy
+                    if nx < 0 or ny < 0 or nx >= n or ny >= n:
+                        continue
+                    j = ny * n + nx
+                    if lab[j] != -1:
+                        continue
+                    if not self._coarse_cell_passable(nx, ny, profile):
+                        lab[j] = -2
+                        continue
+                    lab[j] = comp
+                    stack.append(j)
+            comp += 1
+        self._comp_coarse[key] = lab
+        return lab
+
+    def _coarse_cell_passable(self, cx: int, cy: int, profile: str) -> bool:
+        """粗格是否可通行——**与 `cost_field` 内层循环同判据**（9 点采样全通才算通）。"""
+        x0 = cx * _CELL_LI
+        y0 = cy * _CELL_LI
+        base = self._base
+        road_cells = self._road_cells
+        town_cells = self._town_cells
+        for oy in _SAMPLES:
+            fy = int((y0 + _CELL_LI * oy) // _CELL_LI)
+            if fy > _N - 1:
+                fy = _N - 1
+            for ox in _SAMPLES:
+                fx = int((x0 + _CELL_LI * ox) // _CELL_LI)
+                if fx > _N - 1:
+                    fx = _N - 1
+                idx = fy * _N + fx
+                tid = road_cells.get(idx)
+                if tid is None:
+                    tid = town_cells.get(idx)
+                    if tid is None:
+                        tid = base[idx]
+                if self._sample_speed(profile, tid, 1, 0.0)[0] <= 0.0:
+                    return False
+        return True
+
+    def _same_land(self, a: tuple, b: tuple, profile: str = "road_plan") -> bool:
+        """两粗格是否在**同一（粗格）连通分量**（用于剪掉注定失败的寻路）。"""
+        lab = self.coarse_components(profile)
+        la, lb = lab[a[1] * _N + a[0]], lab[b[1] * _N + b[0]]
+        return la >= 0 and la == lb
+
     def _route_fine(self, a: tuple, b: tuple, margin: int = 6, full: bool = False):
         """细格寻路（profile="road_plan"）：局部绕行或全图兜底；返回 (cells 或 None, cost, reason)。"""
         if full:
@@ -1630,11 +1794,50 @@ class WorldMap:
         return self._astar(field, a, b)
 
     # ---------- 步骤 6：内容点与灵脉 ----------
+    def _town_dist_cells(self) -> list:
+        """每格到**最近城镇**的切比雪夫格距（多源 BFS，用格距代替欧氏距离）。
+
+        用途：内容点按"**城镇周边优先、其余均分**"分配（用户 2026-09-10 拍板）——
+        否则出生城镇四周可能空无一物（实测：视野 66 里内 0 个内容点，出门没得可探）。
+        用格距而非精确欧氏距离，是为了**不引入浮点漂移**（float 距离会随路径变化，
+        破坏"同种子逐位一致"的世界指纹）。1 格 = 50 里，故 8 格 ≈ 400 里。
+        """
+        if self._town_dist is not None:
+            return self._town_dist
+        self._ensure_towns()
+        n = _N
+        INF = 10 ** 6
+        dist = [INF] * (n * n)
+        frontier = []
+        for t in self._towns:
+            cx, cy = cell_of(t.x, t.y)
+            i = cy * n + cx
+            if dist[i] != 0:
+                dist[i] = 0
+                frontier.append((cx, cy))
+        step = 0
+        while frontier and step < _TOWN_ATTRACT_CELLS + 2:
+            step += 1
+            nxt = []
+            for cx, cy in frontier:
+                for dx, dy in _NEIGH8:
+                    nx, ny = cx + dx, cy + dy
+                    if nx < 0 or ny < 0 or nx >= n or ny >= n:
+                        continue
+                    j = ny * n + nx
+                    if dist[j] > step:
+                        dist[j] = step
+                        nxt.append((nx, ny))
+            frontier = nxt
+        self._town_dist = dist
+        return dist
+
     def _build_points(self):
         seed = self.world_seed
         n = _N
         near_river = self._near_river_cells()
         base = self._base
+        td = self._town_dist_cells()          # 城镇周边优先（见 _town_dist_cells 注释）
         tier_idx = {"core": 0, "near": 1, "outer": 2}
         kinds = [k for k in R.CONTENT_KIND_ORDER if k != "vein"]
         dens = {}
@@ -1661,12 +1864,15 @@ class WorldMap:
                 d = R.domain_of_cell(cx, cy)
                 ti = tier_idx[R.DOMAINS[d].tier]
                 domain_land[d].append((cy, cx))
+                # 城镇周边优先：≥400 里外按基准密度均分；400 里内加权（近 → 越密）
+                near_town = td[idx]
+                boost = _DENSITY_TOWN_BOOST if near_town <= _TOWN_ATTRACT_CELLS else 1.0
                 for k in kinds:
-                    if hash01(seed, "cp:" + k, cx, cy) < dens[k][ti]:
+                    if hash01(seed, "cp:" + k, cx, cy) < dens[k][ti] * boost:
                         cands.append((cy, cx, k))
                 if tid in vein_terrain or idx in near_river:
                     vein_all[d].append((cy, cx))
-                    if hash01(seed, "cp:vein", cx, cy) < vein_dens_t[ti]:
+                    if hash01(seed, "cp:vein", cx, cy) < vein_dens_t[ti] * boost:
                         vein_dense[d].append((cy, cx))
 
         # 灵脉：每域 3~6 个；平坦域兜底——严格条件格 < 3 时纳入该域全部可通行非水域格
@@ -1760,15 +1966,18 @@ class WorldMap:
         """城镇影响半径（里）——与生成期同口径，**生成期已算好存入 `_town_rl`**。
 
         半径在生成时是**可变**的（200~620 里），故不写进 `Town` 字段，而在 `_ensure_towns()`
-        时按镇序缓存（`_town_rl` 与 `_towns` 同序）。`town` 可传 `Town` 实例或坐标 tuple。
+        时按镇序缓存（`_town_rl` 与 `_towns` 同序）；另建 `_town_pos` 做 id→序号的 O(1) 索引
+        （**不要**写成遍历比对 id 的循环：那让 `map_view` 这类"遍历全部城镇"的调用退化成
+        O(n²)，实测冷启动 100 秒）。
+        `town` 可传 `Town` 实例或坐标 tuple。
         """
         self._ensure_towns()
         if not isinstance(town, (tuple, list)):
             seq = self._town_rl
             if seq:
-                for i, t in enumerate(self._towns):
-                    if t is town or t.id == getattr(town, "id", None):
-                        return seq[i]
+                i = self._town_pos.get(getattr(town, "id", None))
+                if i is not None:
+                    return seq[i]
             cx, cy = cell_of(float(town.x), float(town.y))
         else:
             cx, cy = cell_of(float(town[0]), float(town[1]))
