@@ -652,38 +652,93 @@ function genFill() {
   updateStatus(`城内补建筑 ${placed} 格（留缝 ${kept} 格）`);
 }
 
+/** 清理：孤岛建筑删掉；门后无路补路；**孤立的路网接回主网**；设施不贴路就拉一格路过去。 */
 function genTidy() {
   pushUndo();
+  // 1) 孤岛建筑（四邻无路无建筑无门）删掉
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    if (grid[y][x] === "#") {
-      let any = false;
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const c = at(x + dx, y + dy);
-        if (c === "+" || c === "#" || c === "G") any = true;
-      }
-      if (!any) grid[y][x] = ".";
+    if (grid[y][x] !== "#") continue;
+    let any = false;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const c = at(x + dx, y + dy);
+      if (c === "+" || c === "#" || c === "G") any = true;
     }
-    if (grid[y][x] === "G") {
-      const vertical = (y === 2 || y === H - 3);
-      if (vertical) { if (at(x, y - 1) === "=") setTile(x, y - 1, "+"); if (at(x, y + 1) === "=") setTile(x, y + 1, "+"); }
-      else { if (at(x - 1, y) === "=") setTile(x - 1, y, "+"); if (at(x + 1, y) === "=") setTile(x + 1, y, "+"); }
+    if (!any) grid[y][x] = ".";
+  }
+  // 2) 门旁补路（城门两侧若是墙，就开出通路）
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (grid[y][x] !== "G") continue;
+    const vertical = (y === 2 || y === H - 3);
+    if (vertical) {
+      if (at(x, y - 1) !== "+") setTile(x, y - 1, "+");
+      if (at(x, y + 1) !== "+") setTile(x, y + 1, "+");
+    } else {
+      if (at(x - 1, y) !== "+") setTile(x - 1, y, "+");
+      if (at(x + 1, y) !== "+") setTile(x + 1, y, "+");
     }
   }
+  // 3) **孤立路网接回主网**：求道路连通分量，把每个小分量用最短直线接到最大分量
+  let linked = 0;
+  for (let round = 0; round < 12; round++) {
+    const comps = roadComponents();
+    if (comps.length <= 1) break;
+    comps.sort((a, b) => b.length - a.length);
+    const main = comps[0];
+    let best = null;                       // 找"主网 ←→ 任一孤岛"最近的一对格
+    for (let ci = 1; ci < comps.length; ci++) {
+      for (const [ax, ay] of comps[ci]) {
+        for (const [bx, by] of main) {
+          const d = Math.abs(ax - bx) + Math.abs(ay - by);
+          if (!best || d < best.d) best = { d, a: [ax, ay], b: [bx, by], ci };
+        }
+      }
+    }
+    if (!best) break;
+    // 先横后竖走一个 L 形（贴网格，不会斜穿建筑群）
+    const [ax, ay] = best.a, [bx, by] = best.b;
+    for (let x = Math.min(ax, bx); x <= Math.max(ax, bx); x++) setTile(x, ay, "+");
+    for (let y = Math.min(ay, by); y <= Math.max(ay, by); y++) setTile(bx, y, "+");
+    linked++;
+  }
+  // 4) 坊市/广场/客栈/藏经阁 不贴路 → 拉一格路过去
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const c = grid[y][x];
     if (c !== "M" && c !== "p" && c !== "I" && c !== "L") continue;
     let road = false;
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (at(x + dx, y + dy) === "+") road = true;
-    if (!road) {
-      let done = false;
-      for (let r = 1; r <= 3 && !done; r++) {
-        for (const [dx, dy] of [[r,0],[-r,0],[0,r],[0,-r]]) {
-          if (at(x + dx, y + dy) === "+") { setTile(x + Math.sign(dx), y + Math.sign(dy), "+"); done = true; break; }
-        }
+    if (road) continue;
+    let done = false;
+    for (let r = 1; r <= 4 && !done; r++) {
+      for (const [dx, dy] of [[r,0],[-r,0],[0,r],[0,-r]]) {
+        if (at(x + dx, y + dy) === "+") { setTile(x + Math.sign(dx), y + Math.sign(dy), "+"); done = true; break; }
       }
     }
   }
   draw();
+  const comps2 = roadComponents();
+  updateStatus(`清理完成：接回 ${linked} 段孤立路网 ｜ 现存 ${comps2.length} 段`);
+}
+
+/** 道路连通分量（4 邻接），返回 [[(x,y), …], …]。 */
+function roadComponents() {
+  const seen = Array.from({ length: H }, () => new Array(W).fill(false));
+  const out = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (grid[y][x] !== "+" || seen[y][x]) continue;
+    const st = [[x, y]], cells = [];
+    seen[y][x] = true;
+    while (st.length) {
+      const [a, b] = st.pop();
+      cells.push([a, b]);
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx = a + dx, ny = b + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H || seen[ny][nx] || grid[ny][nx] !== "+") continue;
+        seen[ny][nx] = true; st.push([nx, ny]);
+      }
+    }
+    out.push(cells);
+  }
+  return out;
 }
 
 // ---------- 体检 / 导出 ----------
@@ -713,7 +768,20 @@ function diagnose() {
     }
     if (n > biggest) biggest = n;
   }
-  if (comps > 1) errs.push(`道路分成 ${comps} 段互不相通（最大一段 ${biggest} 格）——城内走不通`);
+  if (comps > 1) {
+    errs.push(`道路分成 ${comps} 段互不相通（最大一段 ${biggest} 格）——城内走不通`);
+    // 指出每段在哪，省得满图找
+    const rc = roadComponents().sort((a, b) => b.length - a.length);
+    for (let i = 1; i < rc.length && i <= 6; i++) {
+      const xs = rc[i].map((p) => p[0]), ys = rc[i].map((p) => p[1]);
+      const cx = Math.round(xs.reduce((a, b) => a + b, 0) / xs.length);
+      const cy = Math.round(ys.reduce((a, b) => a + b, 0) / ys.length);
+      const edge = (Math.min(...xs) <= 1 || Math.min(...ys) <= 1
+                 || Math.max(...xs) >= W - 2 || Math.max(...ys) >= H - 2);
+      warns.push(`孤岛路段 ${i + 1}：${rc[i].length} 格，中心约 (${cx}, ${cy})`
+        + (edge ? "（在城门外沿——门开了但引路没接上城内）" : ""));
+    }
+  }
   const mustRoad = { M: "坊市", I: "客栈", L: "藏经阁", p: "广场", R: "静室" };
   for (const [ch, nm] of Object.entries(mustRoad)) {
     let tot = 0, bad = 0;
