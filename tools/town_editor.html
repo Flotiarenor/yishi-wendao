@@ -2,25 +2,29 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>一世问道 · 城镇线路图标注工具 v2</title>
+<title>一世问道 · 城镇线路图标注工具 v3</title>
 <style>
   :root { --bg:#14161a; --panel:#1c1f24; --line:#2c3138; --ink:#d9d4c8; --dim:#8b8577;
           --gold:#d8b26a; --blue:#6aa8d8; --red:#c96a6a; --green:#6cc07a; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
          font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif; display:flex; height:100vh; }
-  aside { width:318px; flex:0 0 318px; background:var(--panel); border-right:1px solid var(--line);
+  aside { width:322px; flex:0 0 322px; background:var(--panel); border-right:1px solid var(--line);
           padding:12px; overflow:auto; }
-  main { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:12px; overflow:auto; }
+  main { flex:1; display:flex; gap:12px; padding:12px; overflow:auto; align-items:flex-start; }
+  .stage { display:flex; flex-direction:column; gap:8px; align-items:center; }
   h1 { font-size:15px; margin:0 0 6px; color:var(--gold); }
   h2 { font-size:12px; margin:13px 0 6px; color:var(--dim); font-weight:600; letter-spacing:.5px; }
   .pal { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
-  .pal button { display:flex; align-items:center; gap:6px; padding:5px 7px; background:#22262c;
+  .pal button, .tools button { display:flex; align-items:center; gap:6px; padding:5px 7px; background:#22262c;
                 border:1px solid var(--line); border-radius:6px; color:var(--ink); cursor:pointer;
                 font-size:12px; text-align:left; }
-  .pal button:hover { border-color:var(--gold); }
-  .pal button.on { border-color:var(--gold); box-shadow:0 0 0 1px var(--gold) inset; background:#2a2f36; }
+  .pal button:hover, .tools button:hover { border-color:var(--gold); }
+  .pal button.on, .tools button.on { border-color:var(--gold); box-shadow:0 0 0 1px var(--gold) inset; background:#2a2f36; }
+  .tools { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
   .sw { width:14px; height:14px; border-radius:3px; flex:0 0 14px; border:1px solid #0006; }
+  kbd { background:#2a2f36; border:1px solid var(--line); border-bottom-width:2px; border-radius:4px;
+        padding:0 4px; font-size:10.5px; color:var(--dim); font-family:inherit; }
   .row { display:flex; gap:6px; align-items:center; margin:6px 0; }
   input[type=number], input[type=text], select {
     background:#181b20; border:1px solid var(--line); color:var(--ink); border-radius:5px; padding:4px 6px; width:100%; }
@@ -28,47 +32,53 @@
                padding:6px 9px; cursor:pointer; font-size:12px; }
   button.act:hover { border-color:var(--gold); }
   button.act.primary { background:#3a3222; border-color:var(--gold); color:var(--gold); }
-  .modes { display:flex; gap:0; margin:8px 0; }
+  .modes { display:flex; margin:8px 0; }
   .modes button { flex:1; padding:6px; background:#22262c; border:1px solid var(--line);
                   color:var(--dim); cursor:pointer; font-size:12px; }
   .modes button:first-child { border-radius:6px 0 0 6px; }
   .modes button:last-child { border-radius:0 6px 6px 0; }
   .modes button.on { background:#2a2f36; color:var(--gold); border-color:var(--gold); }
-  .cvwrap { position:relative; }
-  canvas { background:#fff; border:1px solid var(--line); border-radius:6px; image-rendering:pixelated;
-           cursor:crosshair; touch-action:none; }
-  .hint { color:var(--dim); font-size:11.5px; line-height:1.7; }
+  .cvwrap { position:relative; overflow:auto; max-width:100%; border:1px solid var(--line); border-radius:6px; }
+  canvas { background:#fff; image-rendering:pixelated; cursor:crosshair; touch-action:none; display:block; }
+  .hint { color:var(--dim); font-size:11.5px; line-height:1.75; }
   pre { background:#181b20; border:1px solid var(--line); border-radius:6px; padding:8px;
-        max-height:200px; overflow:auto; font-size:11px; color:var(--dim); white-space:pre; }
-  #diag { font-size:11.5px; line-height:1.75; max-height:190px; overflow:auto; }
-  #diag .err { color:var(--red); }
-  #diag .warn { color:var(--gold); }
-  #diag .ok { color:var(--green); }
-  .tag { display:inline-block; padding:0 6px; border:1px solid var(--line); border-radius:9px;
-         font-size:11px; color:var(--dim); }
+        max-height:180px; overflow:auto; font-size:11px; color:var(--dim); white-space:pre; }
+  #diag { font-size:11.5px; line-height:1.75; max-height:170px; overflow:auto; }
+  #diag .err { color:var(--red); } #diag .warn { color:var(--gold); } #diag .ok { color:var(--green); }
+  .tag { display:inline-block; padding:0 6px; border:1px solid var(--line); border-radius:9px; font-size:11px; color:var(--dim); }
+  .panel2 { width:300px; flex:0 0 300px; display:flex; flex-direction:column; gap:9px; }
+  .keys { font-size:11.5px; line-height:1.95; color:var(--dim); }
+  .keys div { display:flex; justify-content:space-between; gap:8px; }
+  .status { font-size:12px; color:var(--gold); }
 </style>
 </head>
 <body>
 <aside>
-  <h1>城镇线路图标注 v2</h1>
-  <p class="hint">
-    两层：<b>要素层</b>（白=道路、黑=建筑）+ <b>分区层</b>（居民区 / 茶楼 / 坊市… 只留位，不写内容）。<br>
-    左键画、右键擦；画完点<b>体检</b>看有没有断路 / 门后无路 / 孤岛。
-  </p>
+  <h1>城镇线路图标注 v3</h1>
+  <p class="hint">左键画、右键擦；<b>B</b> 笔刷 / <b>L</b> 直线 / <b>R</b> 方框 / <b>E</b> 椭圆 / <b>G</b> 油漆桶 / <b>I</b> 吸管；
+    <b>Ctrl+Z</b> 撤销；<b>滚轮</b>缩放。</p>
 
   <div class="modes">
     <button id="modeTile" class="on">要素层</button>
     <button id="modeZone">分区层</button>
   </div>
 
-  <h2 id="palTitle">画笔（要素）</h2>
+  <h2>工具</h2>
+  <div class="tools" id="tools"></div>
+  <div class="row">
+    <label class="hint" style="display:flex;gap:5px;align-items:center">
+      <input type="checkbox" id="fill"> 方框/椭圆<b>填满</b>（<kbd>F</kbd> 切换）
+    </label>
+  </div>
+
+  <h2 id="palTitle">画笔（要素）<span class="hint"> 数字键 <kbd>1</kbd>~<kbd>9</kbd></span></h2>
   <div class="pal" id="palTile"></div>
   <div class="pal" id="palZone" style="display:none"></div>
 
   <h2>画布</h2>
-  <div class="row"><label style="flex:0 0 50px">宽</label><input type="number" id="gw" value="48" min="8" max="120"></div>
-  <div class="row"><label style="flex:0 0 50px">高</label><input type="number" id="gh" value="48" min="8" max="120"></div>
-  <div class="row"><label style="flex:0 0 50px">格</label><input type="number" id="gz" value="12" min="6" max="28"></div>
+  <div class="row"><label style="flex:0 0 46px">宽</label><input type="number" id="gw" value="48" min="8" max="120"></div>
+  <div class="row"><label style="flex:0 0 46px">高</label><input type="number" id="gh" value="48" min="8" max="120"></div>
+  <div class="row"><label style="flex:0 0 46px">格</label><input type="number" id="gz" value="12" min="4" max="40"></div>
   <div class="row">
     <button class="act" id="apply">应用尺寸</button>
     <button class="act" id="clearTile">清要素</button>
@@ -76,8 +86,8 @@
   </div>
 
   <h2>城镇信息</h2>
-  <div class="row"><label style="flex:0 0 50px">名字</label><input type="text" id="townName" value="青石镇"></div>
-  <div class="row"><label style="flex:0 0 50px">档位</label>
+  <div class="row"><label style="flex:0 0 46px">名字</label><input type="text" id="townName" value="青石镇"></div>
+  <div class="row"><label style="flex:0 0 46px">档位</label>
     <select id="townTier">
       <option value="core">core 核心域</option>
       <option value="near">near 近域</option>
@@ -86,7 +96,7 @@
   </div>
 
   <h2>生成器</h2>
-  <div class="row"><label style="flex:0 0 50px">路宽</label><input type="number" id="roadW" value="3" min="1" max="8"></div>
+  <div class="row"><label style="flex:0 0 46px">路宽</label><input type="number" id="roadW" value="3" min="1" max="8"></div>
   <div class="row">
     <button class="act" id="genGrid">正交街网</button>
     <button class="act" id="genWall">城墙+四门</button>
@@ -108,18 +118,39 @@
     <button class="act primary" id="export">生成模板 JSON</button>
     <button class="act" id="copy">复制</button>
   </div>
-  <pre id="out">（点「生成模板 JSON」）</pre>
 </aside>
 
 <main>
-  <div class="cvwrap"><canvas id="cv" width="576" height="576"></canvas></div>
-  <div class="hint">
-    要素：<span class="tag">+ 道路</span> <span class="tag"># 建筑</span>
-    <span class="tag">G 城门</span> <span class="tag">= 城墙</span>
-    <span class="tag">M 坊市</span> <span class="tag">I 客栈</span>
-    <span class="tag">L 藏经阁</span> <span class="tag">R 静室</span>
-    <span class="tag">T 树林</span> <span class="tag">p 广场</span>
-    <span class="tag">（已删水渠：城内水系会断路）</span>
+  <div class="stage">
+    <div class="cvwrap"><canvas id="cv"></canvas></div>
+    <div class="status" id="status">—</div>
+    <div class="hint">
+      要素：<span class="tag">+ 道路</span> <span class="tag"># 建筑</span>
+      <span class="tag">G 城门</span> <span class="tag">= 城墙</span>
+      <span class="tag">M 坊市</span> <span class="tag">I 客栈</span>
+      <span class="tag">L 藏经阁</span> <span class="tag">R 静室</span>
+      <span class="tag">T 树林</span> <span class="tag">p 广场</span>
+      ｜ <b>一个设施 = 一块连通的同类格</b>（3 格宽坊市 = 1 处，不是 3 处）
+    </div>
+  </div>
+
+  <div class="panel2">
+    <h2 style="margin-top:0">快捷键</h2>
+    <div class="keys">
+      <div><span>笔刷 / 直线 / 方框 / 椭圆</span><span><kbd>B</kbd> <kbd>L</kbd> <kbd>R</kbd> <kbd>E</kbd></span></div>
+      <div><span>油漆桶 / 吸管 / 擦除</span><span><kbd>G</kbd> <kbd>I</kbd> <kbd>X</kbd></span></div>
+      <div><span>方框/椭圆：填满开关</span><span><kbd>F</kbd></span></div>
+      <div><span>撤销 / 重做</span><span><kbd>Ctrl+Z</kbd> <kbd>Ctrl+Y</kbd></span></div>
+      <div><span>放大 / 缩小 / 复位</span><span><kbd>+</kbd> <kbd>-</kbd> <kbd>0</kbd></span></div>
+      <div><span>滚轮缩放（以光标为中心）</span><span><kbd>wheel</kbd></span></div>
+      <div><span>要素画笔：第 1~9 个</span><span><kbd>1</kbd>…<kbd>9</kbd></span></div>
+      <div><span>分区画笔：<kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd></span><span></span></div>
+      <div><span>切层 要素 ⇄ 分区</span><span><kbd>Tab</kbd></span></div>
+      <div><span>网格显隐</span><span><kbd>H</kbd></span></div>
+      <div><span>方向键平移画布</span><span><kbd>←↑↓→</kbd></span></div>
+      <div><span>运行体检 / 导出</span><span><kbd>Ctrl+Enter</kbd> <kbd>Ctrl+S</kbd></span></div>
+    </div>
+    <pre id="out">（点「生成模板 JSON」，或按 Ctrl+S）</pre>
   </div>
 </main>
 
@@ -138,7 +169,7 @@ const TILE = {
   "T": { name:"树林",        color:"#2f6b3a" },
   "p": { name:"广场",        color:"#e8e0c0" },
 };
-// 分区表：只"留位"，内容以后填。颜色淡、半透明，叠在要素层下面
+// 分区表：只"留位"，内容以后填（不产生可交互设施）
 const ZONE = {
   "":  { name:"（无）",      color:"#00000000" },
   "r": { name:"居民区",      color:"#c9a22755" },
@@ -155,69 +186,207 @@ const ZONE_ORDER = ["", "r", "t", "m", "c", "w", "g", "o", "s"];
 
 let W = 48, H = 48, Z = 12;
 let grid = [], zones = [];
-let mode = "tile";
+let mode = "tile";              // tile | zone
+let tool = "brush";             // brush | line | rect | ellipse | bucket | picker
 let brushTile = "+", brushZone = "r";
-let drawing = false;
+let fillShape = false, showGrid = true;
+const undoStack = [], redoStack = [];
+const UNDO_MAX = 60;
 
 const cv = document.getElementById("cv");
 const ctx = cv.getContext("2d");
+let panX = 0, panY = 0;         // 画布平移（格）
+let hover = null;               // 光标所在格（画预览用）
+let drag = null;                // {x0,y0,x1,y1} 拖拽中的形状
 
+// ---------- 基础 ----------
 function blank() {
   grid = []; zones = [];
   for (let y = 0; y < H; y++) { grid.push(new Array(W).fill(".")); zones.push(new Array(W).fill("")); }
+  undoStack.length = 0; redoStack.length = 0;
 }
-function resizeCanvas() { cv.width = W * Z; cv.height = H * Z; draw(); }
+function snapshot() { return JSON.stringify({ g: grid, z: zones }); }
+function pushUndo() {
+  undoStack.push(snapshot());
+  if (undoStack.length > UNDO_MAX) undoStack.shift();
+  redoStack.length = 0;
+}
+function restore(s) {
+  const d = JSON.parse(s);
+  grid = d.g.map((r) => r.slice());
+  zones = d.z.map((r) => r.slice());
+  if (grid.length !== H || (grid[0] || []).length !== W) { H = grid.length; W = grid[0].length; }
+  resizeCanvas();
+}
+function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); restore(undoStack.pop()); updateStatus("撤销"); }
+function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); restore(redoStack.pop()); updateStatus("重做"); }
+
+function resizeCanvas() {
+  cv.width = W * Z; cv.height = H * Z;
+  draw();
+}
+function cellOf(e) {
+  const r = cv.getBoundingClientRect();
+  return [Math.floor((e.clientX - r.left) / Z), Math.floor((e.clientY - r.top) / Z)];
+}
+function setTile(x, y, ch) { if (x >= 0 && y >= 0 && x < W && y < H) grid[y][x] = ch; }
+function setZone(x, y, zn) { if (x >= 0 && y >= 0 && x < W && y < H) zones[y][x] = zn; }
+const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? "=" : grid[y][x]);
+const zoneAt = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? "" : zones[y][x]);
+
 function drawCell(cx, cy) {
-  const ch = grid[cy][cx];
-  const zn = zones[cy][cx];
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(cx * Z, cy * Z, Z, Z);
-  if (zn) { ctx.fillStyle = ZONE[zn].color; ctx.fillRect(cx * Z, cy * Z, Z, Z); }
+  const ch = grid[cy][cx], zn = zones[cy][cx];
+  const X = cx * Z, Y = cy * Z;
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(X, Y, Z, Z);
+  if (zn) { ctx.fillStyle = ZONE[zn].color; ctx.fillRect(X, Y, Z, Z); }
   if (ch !== ".") {
     ctx.fillStyle = TILE[ch].color;
     const inset = ch === "#" ? 0 : 1;
-    ctx.fillRect(cx * Z + inset, cy * Z + inset, Z - inset * 2, Z - inset * 2);
-    if (zn && ch === "#") { // 建筑上叠淡色，仍看得出分区
-      ctx.fillStyle = ZONE[zn].color; ctx.fillRect(cx * Z, cy * Z, Z, Z);
-    }
+    ctx.fillRect(X + inset, Y + inset, Z - inset * 2, Z - inset * 2);
+    if (zn && ch === "#") { ctx.fillStyle = ZONE[zn].color; ctx.fillRect(X, Y, Z, Z); }
   }
-  ctx.strokeStyle = "rgba(0,0,0,.08)";
-  ctx.strokeRect(cx * Z + .5, cy * Z + .5, Z - 1, Z - 1);
+  if (showGrid && Z >= 6) {
+    ctx.strokeStyle = "rgba(0,0,0,.09)";
+    ctx.strokeRect(X + .5, Y + .5, Z - 1, Z - 1);
+  }
 }
+function drawShape(shape, ch, zn, erase) {
+  // ch/zn = 要画的字符；erase=true 时把形状覆盖区清空（右键拖形状 = 擦形状）
+  const mark = (x, y) => {
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+    if (mode === "tile") {
+      const v = erase ? "." : ch;
+      setTile(x, y, v);
+      if (v !== "." && v !== "+") setZone(x, y, "");
+    } else {
+      setZone(x, y, erase ? "" : zn);
+    }
+  };
+  if (shape === "rect") {
+    const [x0, y0, x1, y1] = dragRect();
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const edge = (x === x0 || x === x1 || y === y0 || y === y1);
+      if (fillShape && mode === "tile") mark(x, y);
+      else if (edge) mark(x, y);
+      else if (mode === "zone" && fillShape) mark(x, y);
+    }
+  } else if (shape === "ellipse") {
+    const [x0, y0, x1, y1] = dragRect();
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, rx = (x1 - x0) / 2 + .5, ry = (y1 - y0) / 2 + .5;
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const inside = ((x + .5 - (cx + .5)) / rx) ** 2 + ((y + .5 - (cy + .5)) / ry) ** 2 <= 1;
+      if (!inside) continue;
+      const nearEdge = ((x + 1.5 - (cx + .5)) / rx) ** 2 + ((y + .5 - (cy + .5)) / ry) ** 2 > 1
+                    || ((x - .5 - (cx + .5)) / rx) ** 2 + ((y + .5 - (cy + .5)) / ry) ** 2 > 1
+                    || ((x + .5 - (cx + .5)) / rx) ** 2 + ((y + 1.5 - (cy + .5)) / ry) ** 2 > 1
+                    || ((x + .5 - (cx + .5)) / rx) ** 2 + ((y - .5 - (cy + .5)) / ry) ** 2 > 1;
+      if (fillShape || nearEdge) mark(x, y);
+    }
+  } else if (shape === "line") {
+    const [x0, y0, x1, y1] = dragRect();
+    for (const [x, y] of bresenham(x0, y0, x1, y1)) mark(x, y);
+  }
+}
+function dragRect() {
+  const x0 = Math.min(drag.x0, drag.x1), x1 = Math.max(drag.x0, drag.x1);
+  const y0 = Math.min(drag.y0, drag.y1), y1 = Math.max(drag.y0, drag.y1);
+  return [x0, y0, x1, y1];
+}
+function bresenham(x0, y0, x1, y1) {
+  const out = []; let dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  let err = dx - dy;
+  for (;;) {
+    out.push([x0, y0]);
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * err;
+    if (e2 > -dy) { err -= dy; x0 += sx; }
+    if (e2 < dx) { err += dx; y0 += sy; }
+  }
+  return out;
+}
+function bucket(x, y) {
+  const isZ = mode === "zone";
+  const src = isZ ? zoneAt(x, y) : at(x, y);
+  const dst = isZ ? (brushZone || "") : (brushTile || ".");
+  if (src === dst) return;
+  const seen = Array.from({ length: H }, () => new Array(W).fill(false));
+  const st = [[x, y]];
+  while (st.length) {
+    const [a, b] = st.pop();
+    if (a < 0 || b < 0 || a >= W || b >= H || seen[b][a]) continue;
+    seen[b][a] = true;
+    const cur = isZ ? zones[b][a] : grid[b][a];
+    if (cur !== src) continue;
+    if (isZ) zones[b][a] = dst; else grid[b][a] = dst;
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) st.push([a + dx, b + dy]);
+  }
+}
+
+// ---------- 绘制 ----------
 function draw() {
   ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) drawCell(x, y);
-}
-function paint(cx, cy, erase) {
-  if (cx < 0 || cy < 0 || cx >= W || cy >= H) return;
-  if (mode === "tile") {
-    const ch = erase ? "." : brushTile;
-    if (grid[cy][cx] === ch) return;
-    grid[cy][cx] = ch;
-    if (ch !== "." && ch !== "+") zones[cy][cx] = "";   // 要素覆盖分区
-  } else {
-    const zn = erase ? "" : brushZone;
-    if (zones[cy][cx] === zn) return;
-    zones[cy][cx] = zn;
+  // 形状预览
+  if (drag && tool !== "brush" && tool !== "bucket" && tool !== "picker") {
+    ctx.save();
+    ctx.strokeStyle = "rgba(216,178,106,.95)"; ctx.lineWidth = 2;
+    const [x0, y0, x1, y1] = dragRect();
+    if (tool === "line") {
+      ctx.beginPath();
+      ctx.moveTo((drag.x0 + .5) * Z, (drag.y0 + .5) * Z);
+      ctx.lineTo((drag.x1 + .5) * Z, (drag.y1 + .5) * Z);
+      ctx.stroke();
+    } else if (tool === "rect") {
+      ctx.strokeRect(x0 * Z + .5, y0 * Z + .5, (x1 - x0 + 1) * Z - 1, (y1 - y0 + 1) * Z - 1);
+    } else if (tool === "ellipse") {
+      ctx.beginPath();
+      ctx.ellipse((x0 + x1 + 1) / 2 * Z, (y0 + y1 + 1) / 2 * Z,
+                  (x1 - x0 + 1) / 2 * Z, (y1 - y0 + 1) / 2 * Z, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
-  drawCell(cx, cy);
+  // 光标格
+  if (hover) {
+    ctx.strokeStyle = "rgba(106,168,216,.9)"; ctx.lineWidth = 2;
+    ctx.strokeRect(hover[0] * Z + 1, hover[1] * Z + 1, Z - 2, Z - 2);
+  }
 }
 
 // ---------- 面板 ----------
-function buildPal(el, table, order, get, set) {
-  order.forEach((k) => {
+const palTile = document.getElementById("palTile"), palZone = document.getElementById("palZone");
+function buildPal(el, table, order, keyName, set) {
+  order.forEach((k, i) => {
     const b = document.createElement("button");
     b.dataset.k = k;
-    const nm = table[k].name;
-    b.innerHTML = `<span class="sw" style="background:${table[k].color || "#ffffff"}"></span>${k === "." || k === "" ? "擦除" : k} · ${nm}`;
+    const label = (k === "." || k === "") ? "擦除" : k;
+    b.innerHTML = `<span class="sw" style="background:${table[k].color || "#fff"}"></span>${label} · ${table[k].name}`
+      + (i < 9 ? ` <kbd>${i + 1}</kbd>` : "");
     b.onclick = () => { set(k); redrawPal(); };
     el.appendChild(b);
   });
 }
-const palTile = document.getElementById("palTile"), palZone = document.getElementById("palZone");
-buildPal(palTile, TILE, TILE_ORDER, () => brushTile, (k) => (brushTile = k));
-buildPal(palZone, ZONE, ZONE_ORDER, () => brushZone, (k) => (brushZone = k));
-palZone.dataset.k = "";
+buildPal(palTile, TILE, TILE_ORDER, "tile", (k) => (brushTile = k));
+buildPal(palZone, ZONE, ZONE_ORDER, "zone", (k) => (brushZone = k));
+const TOOLS = [
+  ["brush", "笔刷", "B"], ["line", "直线", "L"], ["rect", "方框", "R"], ["ellipse", "椭圆", "E"],
+  ["bucket", "油漆桶", "G"], ["picker", "吸管", "I"],
+];
+const toolsEl = document.getElementById("tools");
+TOOLS.forEach(([k, nm, key]) => {
+  const b = document.createElement("button");
+  b.dataset.k = k;
+  b.innerHTML = `<span class="sw" style="background:#2a2f36"></span>${nm} <kbd>${key}</kbd>`;
+  b.onclick = () => setTool(k);
+  toolsEl.appendChild(b);
+});
+function setTool(k) {
+  tool = k;
+  [...toolsEl.children].forEach((b) => b.classList.toggle("on", b.dataset.k === k));
+  cv.style.cursor = k === "picker" ? "copy" : "crosshair";
+  updateStatus();
+}
 function redrawPal() {
   [...palTile.children].forEach((b) => b.classList.toggle("on", mode === "tile" && b.dataset.k === brushTile));
   [...palZone.children].forEach((b) => b.classList.toggle("on", mode === "zone" && b.dataset.k === brushZone));
@@ -226,48 +395,97 @@ function setMode(m) {
   mode = m;
   document.getElementById("modeTile").classList.toggle("on", m === "tile");
   document.getElementById("modeZone").classList.toggle("on", m === "zone");
-  document.getElementById("palTitle").textContent = m === "tile" ? "画笔（要素）" : "画笔（分区 · 只留位）";
+  document.getElementById("palTitle").innerHTML = (m === "tile" ? "画笔（要素）" : "画笔（分区 · 只留位）")
+    + ' <span class="hint">' + (m === "tile" ? "数字键 <kbd>1</kbd>~<kbd>9</kbd>" : "<kbd>Alt</kbd>+数字键") + "</span>";
   palTile.style.display = m === "tile" ? "grid" : "none";
   palZone.style.display = m === "zone" ? "grid" : "none";
   redrawPal();
+  updateStatus();
 }
 document.getElementById("modeTile").onclick = () => setMode("tile");
 document.getElementById("modeZone").onclick = () => setMode("zone");
+function updateStatus(extra) {
+  const t = TOOLS.find((x) => x[0] === tool)[1];
+  const b = mode === "tile" ? (brushTile + " " + TILE[brushTile].name) : (brushZone || "擦除") + " " + ZONE[brushZone].name;
+  document.getElementById("status").textContent =
+    `工具：${t}${(tool === "rect" || tool === "ellipse") ? (fillShape ? "（填满）" : "（空心）") : ""}`
+    + ` ｜ ${mode === "tile" ? "要素" : "分区"}：${b} ｜ 格 ${Z}px ｜ ${W}×${H}`
+    + (extra ? " ｜ " + extra : "");
+}
 
 // ---------- 画布交互 ----------
-function cellOf(e) {
-  const r = cv.getBoundingClientRect();
-  return [Math.floor((e.clientX - r.left) / Z), Math.floor((e.clientY - r.top) / Z)];
-}
 cv.addEventListener("contextmenu", (e) => e.preventDefault());
+cv.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  const before = [(e.clientX - r.left) / Z, (e.clientY - r.top) / Z];
+  const nz = Math.max(4, Math.min(40, Math.round(Z * (e.deltaY < 0 ? 1.25 : 0.8))));
+  if (nz === Z) return;
+  Z = nz;
+  resizeCanvas();
+  const after = [(e.clientX - r.left) / Z, (e.clientY - r.top) / Z];
+  cv.parentElement.scrollLeft += (before[0] - after[0]) * Z;
+  cv.parentElement.scrollTop += (before[1] - after[1]) * Z;
+  document.getElementById("gz").value = Z;
+  updateStatus();
+}, { passive: false });
+
 cv.addEventListener("pointerdown", (e) => {
-  drawing = true;
-  cv.setPointerCapture(e.pointerId);
   const [x, y] = cellOf(e);
-  paint(x, y, e.button === 2 || (mode === "tile" && brushTile === ".") || (mode === "zone" && brushZone === ""));
+  if (tool === "picker") {
+    if (mode === "tile") { brushTile = at(x, y); } else { brushZone = zoneAt(x, y); }
+    redrawPal(); setTool("brush"); updateStatus("吸管取色"); return;
+  }
+  cv.setPointerCapture(e.pointerId);
+  const erase = e.button === 2;
+  if (tool === "brush") {
+    pushUndo();
+    if (mode === "tile") {
+      const ch = erase ? "." : brushTile;
+      setTile(x, y, ch); if (ch !== "." && ch !== "+") setZone(x, y, "");
+    } else setZone(x, y, erase ? "" : brushZone);
+    drawCell(x, y); draw();
+    drag = { x0: x, y0: y, x1: x, y1: y, erase, painting: true };
+  } else if (tool === "bucket") {
+    pushUndo(); bucket(x, y); draw();
+  } else {
+    drag = { x0: x, y0: y, x1: x, y1: y, erase };
+    draw();
+  }
 });
 cv.addEventListener("pointermove", (e) => {
-  if (!drawing) return;
   const [x, y] = cellOf(e);
-  paint(x, y, (e.buttons & 2) !== 0 || (mode === "tile" && brushTile === ".") || (mode === "zone" && brushZone === ""));
+  hover = [x, y];
+  if (!drag) { draw(); return; }
+  drag.x1 = x; drag.y1 = y;
+  if (drag.painting && tool === "brush") {
+    const ch = drag.erase ? "." : brushTile;
+    if (mode === "tile") { setTile(x, y, ch); if (ch !== "." && ch !== "+") setZone(x, y, ""); }
+    else setZone(x, y, drag.erase ? "" : brushZone);
+  }
+  draw();
 });
-cv.addEventListener("pointerup", () => { drawing = false; });
+cv.addEventListener("pointerleave", () => { hover = null; draw(); });
+cv.addEventListener("pointerup", () => {
+  if (!drag) return;
+  if (tool === "line" || tool === "rect" || tool === "ellipse") {
+    pushUndo();
+    // 左键拖 = 画；右键拖 = 把形状覆盖区擦空
+    drawShape(tool, brushTile, brushZone, !!drag.erase);
+    draw();
+  }
+  drag = null; draw(); updateStatus();
+});
 
-// ---------- 生成器 ----------
+// ---------- 生成器（同 v2） ----------
 const RW = () => Math.max(1, parseInt(document.getElementById("roadW").value || "3", 10));
-const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? "=" : grid[y][x]);
-function setTile(x, y, ch) { if (x >= 0 && y >= 0 && x < W && y < H) grid[y][x] = ch; }
-
-/** 正交街网：主干 2 条 + 每隔 gap 条支路（比纯十字更像真镇子） */
 function genGridRoads() {
-  const w = RW(), gap = 9;
-  const cx = (W / 2) | 0, cy = (H / 2) | 0;
+  pushUndo();
+  const w = RW(), gap = 9, cx = (W / 2) | 0, cy = (H / 2) | 0;
   const band = (c, len, vert) => {
     for (let i = 0; i < len; i++) {
       const p = c - ((w / 2) | 0) + i;
-      for (let t = 0; t < (vert ? H : W); t++) {
-        if (vert) setTile(p, t, "+"); else setTile(t, p, "+");
-      }
+      for (let t = 0; t < (vert ? H : W); t++) { if (vert) setTile(p, t, "+"); else setTile(t, p, "+"); }
     }
   };
   band(cx, w, true); band(cy, w, false);
@@ -275,78 +493,62 @@ function genGridRoads() {
   for (let y = gap; y < H - 2; y += gap) if (Math.abs(y - cy) > w) band(y, Math.min(w, 2), false);
   draw();
 }
-
-/** 城墙 + 四门：门开在**主干道端点**，并把门内外接上路（修"门后无路"） */
 function genWall() {
-  const m = 2, w = RW();
-  const cx = (W / 2) | 0, cy = (H / 2) | 0;
+  pushUndo();
+  const m = 2, w = RW(), cx = (W / 2) | 0, cy = (H / 2) | 0;
   for (let x = m; x < W - m; x++) { setTile(x, m, "="); setTile(x, H - m - 1, "="); }
   for (let y = m; y < H - m; y++) { setTile(m, y, "="); setTile(W - m - 1, y, "="); }
-  // 门开在主街与墙的交点
   for (let d = 0; d < Math.max(1, w - 1); d++) {
-    setTile(cx - ((w / 2) | 0) + d, m, "G");
-    setTile(cx - ((w / 2) | 0) + d, H - m - 1, "G");
-    setTile(m, cy - ((w / 2) | 0) + d, "G");
-    setTile(W - m - 1, cy - ((w / 2) | 0) + d, "G");
+    setTile(cx - ((w / 2) | 0) + d, m, "G"); setTile(cx - ((w / 2) | 0) + d, H - m - 1, "G");
+    setTile(m, cy - ((w / 2) | 0) + d, "G"); setTile(W - m - 1, cy - ((w / 2) | 0) + d, "G");
   }
-  // 门内外接路
   for (let d = 0; d < w; d++) {
     const px = cx - ((w / 2) | 0) + d, py = cy - ((w / 2) | 0) + d;
     for (let y = m; y <= cy; y++) setTile(px, y, "+");
     for (let y = cy; y < H - m; y++) setTile(px, y, "+");
     for (let x = m; x <= cx; x++) setTile(x, py, "+");
     for (let x = cx; x < W - m; x++) setTile(x, py, "+");
-    for (let y = 0; y < m; y++) setTile(px, y, "+");            // 门外
+    for (let y = 0; y < m; y++) setTile(px, y, "+");
     for (let y = H - m; y < H; y++) setTile(px, y, "+");
     for (let x = 0; x < m; x++) setTile(x, py, "+");
     for (let x = W - m; x < W; x++) setTile(x, py, "+");
   }
-  // 补四角
   setTile(m, m, "="); setTile(W - m - 1, m, "="); setTile(m, H - m - 1, "="); setTile(W - m - 1, H - m - 1, "=");
   draw();
 }
-
-/** 沿街补建筑：只在"贴着路且留出人行缝"的格子上放，避免墙贴墙的闷块 */
 function genBlocks() {
+  pushUndo();
   let s = 20260910;
   const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
   const isRoad = (x, y) => at(x, y) === "+" || at(x, y) === "G";
   for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
     if (grid[y][x] !== "." || zones[y][x]) continue;
-    let touch = 0;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (isRoad(x + dx, y + dy)) touch++;
-    if (touch === 0) continue;
-    // 与已有建筑至少隔 1 格（除同排连续）
-    let adjB = 0;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (at(x + dx, y + dy) === "#") adjB++;
-    if (adjB >= 4) continue;
+    let touch = 0, adjB = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (isRoad(x + dx, y + dy)) touch++;
+      if (at(x + dx, y + dy) === "#") adjB++;
+    }
+    if (touch === 0 || adjB >= 4) continue;
     if (rnd() < 0.62) setTile(x, y, "#");
   }
   draw();
 }
-
-/** 按建筑聚集区自动分区：只留位、不写内容（用户要的"居民区/茶楼"） */
 function genZones() {
-  // 简单分片：以主干道为界划 4 象限；再按"离中心远近"给不同性质
+  pushUndo();
   const cx = (W / 2) | 0, cy = (H / 2) | 0;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    if (grid[y][x] === "=" || grid[y][x] === "G") continue;
-    if (zones[y][x]) continue;
+    if (grid[y][x] === "=" || grid[y][x] === "G" || zones[y][x]) continue;
     const near = Math.abs(x - cx) + Math.abs(y - cy);
     let zn = "r";
-    if (near < 6) zn = "m";                 // 镇心：商铺
-    else if (near < 12) zn = "t";           // 内圈：茶楼餐馆
-    else if (x < cx && y < cy) zn = "w";    // 西北：作坊
-    else if (x > cx && y < cy) zn = "c";    // 东北：寺观
-    else if (x < cx && y > cy) zn = "s";    // 西南：仓储
-    else zn = "r";                          // 东南：居民
+    if (near < 6) zn = "m"; else if (near < 12) zn = "t";
+    else if (x < cx && y < cy) zn = "w"; else if (x > cx && y < cy) zn = "c";
+    else if (x < cx && y > cy) zn = "s";
     zones[y][x] = zn;
   }
   draw();
 }
-
-/** 清理：孤岛建筑（四邻无路无建筑）删掉；门后无路则补一格路 */
 function genTidy() {
+  pushUndo();
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     if (grid[y][x] === "#") {
       let any = false;
@@ -356,21 +558,18 @@ function genTidy() {
       }
       if (!any) grid[y][x] = ".";
     }
-    if (grid[y][x] === "G") {                      // 门必须在墙线上，且内外各有一格通
+    if (grid[y][x] === "G") {
       const vertical = (y === 2 || y === H - 3);
-      if (vertical) { setTile(x, y - 1, at(x, y - 1) === "=" ? "+" : at(x, y - 1));
-                      setTile(x, y + 1, at(x, y + 1) === "=" ? "+" : at(x, y + 1)); }
-      else { setTile(x - 1, y, at(x - 1, y) === "=" ? "+" : at(x - 1, y));
-             setTile(x + 1, y, at(x + 1, y) === "=" ? "+" : at(x + 1, y)); }
+      if (vertical) { if (at(x, y - 1) === "=") setTile(x, y - 1, "+"); if (at(x, y + 1) === "=") setTile(x, y + 1, "+"); }
+      else { if (at(x - 1, y) === "=") setTile(x - 1, y, "+"); if (at(x + 1, y) === "=") setTile(x + 1, y, "+"); }
     }
   }
-  // 广场 / 坊市 必须贴路
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const c = grid[y][x];
     if (c !== "M" && c !== "p" && c !== "I" && c !== "L") continue;
     let road = false;
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (at(x + dx, y + dy) === "+") road = true;
-    if (!road) {                                   // 就近拉一格路过去
+    if (!road) {
       let done = false;
       for (let r = 1; r <= 3 && !done; r++) {
         for (const [dx, dy] of [[r,0],[-r,0],[0,r],[0,-r]]) {
@@ -382,24 +581,21 @@ function genTidy() {
   draw();
 }
 
-// ---------- 体检 ----------
+// ---------- 体检 / 导出 ----------
 function diagnose() {
   const errs = [], warns = [];
   const isRoad = (x, y) => at(x, y) === "+";
-  // 1) 城门连通性
   let gates = 0, badGates = 0;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     if (grid[y][x] !== "G") continue;
     gates++;
     const vert = (y === 2 || y === H - 3);
-    const a = vert ? (isRoad(x, y - 1) || isRoad(x, y + 1)) : (isRoad(x - 1, y) || isRoad(x + 1, y));
-    if (!a) badGates++;
+    const ok = vert ? (isRoad(x, y - 1) || isRoad(x, y + 1)) : (isRoad(x - 1, y) || isRoad(x + 1, y));
+    if (!ok) badGates++;
   }
   if (badGates) errs.push(`${badGates}/${gates} 个城门内侧没有路（人进门撞墙）`);
-  // 2) 道路连通分量（门 / 坊市 / 客栈 必须落在同一分量）
   const seen = Array.from({ length: H }, () => new Array(W).fill(false));
   let comps = 0, biggest = 0;
-  const key = [];
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (isRoad(x, y) && !seen[y][x]) {
     comps++; let n = 0; const st = [[x, y]]; seen[y][x] = true;
     while (st.length) {
@@ -410,10 +606,9 @@ function diagnose() {
         seen[ny][nx] = true; st.push([nx, ny]);
       }
     }
-    if (n > biggest) { biggest = n; key[0] = x; key[1] = y; }
+    if (n > biggest) biggest = n;
   }
   if (comps > 1) errs.push(`道路分成 ${comps} 段互不相通（最大一段 ${biggest} 格）——城内走不通`);
-  // 3) 设施贴不贴路
   const mustRoad = { M: "坊市", I: "客栈", L: "藏经阁", p: "广场", R: "静室" };
   for (const [ch, nm] of Object.entries(mustRoad)) {
     let tot = 0, bad = 0;
@@ -426,73 +621,135 @@ function diagnose() {
     }
     if (bad) warns.push(`${nm}：${bad}/${tot} 格两格内没有路（玩家走不到）`);
   }
-  // 4) 城墙是否被路穿断
   let holes = 0;
-  for (let x = 2; x < W - 2; x++) {
-    if (grid[2][x] === "+") holes++;
-    if (grid[H - 3][x] === "+") holes++;
-  }
-  for (let y = 2; y < H - 2; y++) {
-    if (grid[y][2] === "+") holes++;
-    if (grid[y][W - 3] === "+") holes++;
-  }
+  for (let x = 2; x < W - 2; x++) { if (grid[2][x] === "+") holes++; if (grid[H - 3][x] === "+") holes++; }
+  for (let y = 2; y < H - 2; y++) { if (grid[y][2] === "+") holes++; if (grid[y][W - 3] === "+") holes++; }
   if (holes) errs.push(`城墙被道路直接穿过 ${holes} 处（应改为开门 G）`);
-  // 5) 空旷度
-  let empty = 0, total = W * H;
+  let empty = 0;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (grid[y][x] === "." && !zones[y][x]) empty++;
-  if (empty / total > 0.5) warns.push(`空旷：${(empty / total * 100).toFixed(0)}% 的格子既无要素也无分区（建议补分区）`);
-  // 6) 分区覆盖
-  const zc = {};
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (zones[y][x]) zc[zones[y][x]] = (zc[zones[y][x]] || 0) + 1;
-  return { errs, warns, comps, gates, emptyRatio: empty / total, zc };
+  if (empty / (W * H) > 0.5) warns.push(`空旷：${(empty / (W * H) * 100).toFixed(0)}% 的格子既无要素也无分区`);
+  // 设施连通块统计（与引擎 content/town_layouts.py 同口径）
+  const fac = facilityCounts();
+  return { errs, warns, comps, gates, emptyRatio: empty / (W * H), fac };
+}
+function facilityCounts() {
+  const chars = ["M", "I", "L", "R", "p"];
+  const names = { M: "坊市", I: "客栈", L: "藏经阁", R: "静室", p: "广场" };
+  const out = {};
+  for (const ch of chars) {
+    const seen = Array.from({ length: H }, () => new Array(W).fill(false));
+    let n = 0, cells = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (grid[y][x] !== ch || seen[y][x]) continue;
+      n++; const st = [[x, y]]; seen[y][x] = true;
+      while (st.length) {
+        const [a, b] = st.pop(); cells++;
+        for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+          const nx = a + dx, ny = b + dy;
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H || seen[ny][nx] || grid[ny][nx] !== ch) continue;
+          seen[ny][nx] = true; st.push([nx, ny]);
+        }
+      }
+    }
+    if (n) out[names[ch]] = n;
+  }
+  return out;
 }
 document.getElementById("check").onclick = () => {
-  const d = diagnose();
-  const el = document.getElementById("diag");
-  const lines = [];
-  if (!d.errs.length) lines.push(`<div class="ok">✓ 无硬伤</div>`);
-  d.errs.forEach((e) => lines.push(`<div class="err">✗ ${e}</div>`));
-  d.warns.forEach((w) => lines.push(`<div class="warn">! ${w}</div>`));
-  lines.push(`<div>道路连通段：${d.comps} ｜ 城门：${d.gates} ｜ 空旷率：${(d.emptyRatio * 100).toFixed(0)}%</div>`);
-  if (Object.keys(d.zc).length) {
-    lines.push(`<div>分区：${Object.entries(d.zc).map(([k, v]) => ZONE[k].name + " " + v).join(" ｜ ")}</div>`);
-  }
-  el.innerHTML = lines.join("");
+  const d = diagnose(), el = document.getElementById("diag"), L = [];
+  if (!d.errs.length) L.push(`<div class="ok">✓ 无硬伤</div>`);
+  d.errs.forEach((e) => L.push(`<div class="err">✗ ${e}</div>`));
+  d.warns.forEach((w) => L.push(`<div class="warn">! ${w}</div>`));
+  L.push(`<div>道路连通段：${d.comps} ｜ 城门：${d.gates} ｜ 空旷率：${(d.emptyRatio * 100).toFixed(0)}%</div>`);
+  L.push(`<div>设施（按连通块）：${Object.entries(d.fac).map(([k, v]) => k + " " + v + " 处").join(" ｜ ") || "无"}</div>`);
+  el.innerHTML = L.join("");
 };
-
-// ---------- 导出 ----------
-function rows() { return grid.map((r) => r.join("")); }
-function zoneRows() { return zones.map((r) => r.map((c) => c || " ").join("")); }
 function exportJson() {
-  const r = rows(), zr = zoneRows();
+  const r = grid.map((x) => x.join("")), zr = zones.map((x) => x.map((c) => c || " ").join(""));
   const counts = {}; r.forEach((s) => [...s].forEach((c) => { counts[c] = (counts[c] || 0) + 1; }));
+  const zc = {}; zr.forEach((s) => [...s].forEach((c) => { if (c !== " ") zc[c] = (zc[c] || 0) + 1; }));
   const d = diagnose();
   const obj = {
-    name: (document.getElementById("townName")?.value || "").trim() || "青石镇",
-    tier: document.getElementById("townTier")?.value || "outer",
+    name: (document.getElementById("townName").value || "").trim() || "青石镇",
+    tier: document.getElementById("townTier").value,
     w: W, h: H, road_width: RW(),
     legend: TILE_ORDER.filter((c) => c in counts).map((c) => `${c} = ${TILE[c].name}`),
     zone_legend: Object.entries(ZONE).filter(([k]) => k).map(([k, v]) => `${k} = ${v.name}`),
-    zone_counts: (() => { const c = {}; zones.flat().forEach((z) => { if (z) c[z] = (c[z] || 0) + 1; }); return c; })(),
-    counts,
+    counts, zone_counts: zc,
+    facilities: d.fac,
     diagnostics: { errors: d.errs, warnings: d.warns, road_components: d.comps, gates: d.gates },
-    rows: r,
-    zone_rows: zr,
+    rows: r, zone_rows: zr,
   };
   document.getElementById("out").textContent = JSON.stringify(obj, null, 2);
 }
+
+// ---------- 快捷键 ----------
+document.addEventListener("keydown", (e) => {
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA")) return;
+  const k = e.key;
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (ctrl && (k === "z" || k === "Z")) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (ctrl && (k === "y" || k === "Y")) { e.preventDefault(); redo(); return; }
+  if (ctrl && (k === "s" || k === "S")) { e.preventDefault(); exportJson(); updateStatus("已导出 JSON"); return; }
+  if (ctrl && k === "Enter") { e.preventDefault(); document.getElementById("check").click(); return; }
+  if (ctrl) return;
+  // Alt + 数字 = 分区画笔
+  if (e.altKey && /^[1-9]$/.test(k)) {
+    e.preventDefault();
+    const idx = parseInt(k, 10);
+    if (idx < ZONE_ORDER.length) { mode === "zone" || setMode("zone"); brushZone = ZONE_ORDER[idx]; redrawPal(); updateStatus(); }
+    return;
+  }
+  if (/^[1-9]$/.test(k)) {
+    e.preventDefault();
+    const idx = parseInt(k, 10) - 1;
+    if (idx < TILE_ORDER.length) { if (mode !== "tile") setMode("tile"); brushTile = TILE_ORDER[idx]; redrawPal(); updateStatus(); }
+    return;
+  }
+  const map = { b: "brush", l: "line", r: "rect", e: "ellipse", g: "bucket", i: "picker", x: "brush" };
+  const lk = k.toLowerCase();
+  if (lk in map) {
+    if (lk === "x") { if (mode === "tile") brushTile = "."; else brushZone = ""; redrawPal(); }
+    setTool(map[lk]); return;
+  }
+  switch (k) {
+    case "f": case "F": {
+      fillShape = !fillShape;
+      document.getElementById("fill").checked = fillShape;
+      updateStatus(); break;
+    }
+    case "Tab": e.preventDefault(); setMode(mode === "tile" ? "zone" : "tile"); break;
+    case "h": case "H": showGrid = !showGrid; draw(); updateStatus(showGrid ? "网格开" : "网格关"); break;
+    case "+": case "=": Z = Math.min(40, Z + 2); document.getElementById("gz").value = Z; resizeCanvas(); updateStatus(); break;
+    case "-": case "_": Z = Math.max(4, Z - 2); document.getElementById("gz").value = Z; resizeCanvas(); updateStatus(); break;
+    case "0": Z = 12; document.getElementById("gz").value = Z; resizeCanvas(); updateStatus("缩放复位"); break;
+    case "ArrowLeft": case "ArrowRight": case "ArrowUp": case "ArrowDown": {
+      const w = cv.parentElement;
+      const d = Z * 3;
+      if (k === "ArrowLeft") w.scrollLeft -= d;
+      if (k === "ArrowRight") w.scrollLeft += d;
+      if (k === "ArrowUp") w.scrollTop -= d;
+      if (k === "ArrowDown") w.scrollTop += d;
+      e.preventDefault(); break;
+    }
+    default: break;
+  }
+});
+document.getElementById("fill").onchange = (e) => { fillShape = e.target.checked; updateStatus(); };
 document.getElementById("apply").onclick = () => {
+  pushUndo();
   W = Math.max(8, Math.min(120, parseInt(document.getElementById("gw").value, 10) || 48));
   H = Math.max(8, Math.min(120, parseInt(document.getElementById("gh").value, 10) || 48));
-  Z = Math.max(6, Math.min(28, parseInt(document.getElementById("gz").value, 10) || 12));
+  Z = Math.max(4, Math.min(40, parseInt(document.getElementById("gz").value, 10) || 12));
   blank(); resizeCanvas();
 };
 document.getElementById("gz").onchange = () => {
-  Z = Math.max(6, Math.min(28, parseInt(document.getElementById("gz").value, 10) || 12));
+  Z = Math.max(4, Math.min(40, parseInt(document.getElementById("gz").value, 10) || 12));
   resizeCanvas();
 };
-document.getElementById("clearTile").onclick = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) grid[y][x] = "."; draw(); };
-document.getElementById("clearZone").onclick = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) zones[y][x] = ""; draw(); };
+document.getElementById("clearTile").onclick = () => { pushUndo(); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) grid[y][x] = "."; draw(); };
+document.getElementById("clearZone").onclick = () => { pushUndo(); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) zones[y][x] = ""; draw(); };
 document.getElementById("genGrid").onclick = genGridRoads;
 document.getElementById("genWall").onclick = genWall;
 document.getElementById("genBlocks").onclick = genBlocks;
@@ -503,7 +760,7 @@ document.getElementById("copy").onclick = async () => {
   try { await navigator.clipboard.writeText(document.getElementById("out").textContent); } catch {}
 };
 
-blank(); setMode("tile"); resizeCanvas();
+blank(); setTool("brush"); setMode("tile"); resizeCanvas(); updateStatus();
 </script>
 </body>
 </html>
