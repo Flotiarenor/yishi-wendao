@@ -768,31 +768,44 @@ function diagnose() {
     }
     if (n > biggest) biggest = n;
   }
-  if (comps > 1) {
-    errs.push(`道路分成 ${comps} 段互不相通（最大一段 ${biggest} 格）——城内走不通`);
-    // 指出每段在哪，省得满图找
-    const rc = roadComponents().sort((a, b) => b.length - a.length);
-    for (let i = 1; i < rc.length && i <= 6; i++) {
-      const xs = rc[i].map((p) => p[0]), ys = rc[i].map((p) => p[1]);
-      const cx = Math.round(xs.reduce((a, b) => a + b, 0) / xs.length);
-      const cy = Math.round(ys.reduce((a, b) => a + b, 0) / ys.length);
-      const edge = (Math.min(...xs) <= 1 || Math.min(...ys) <= 1
-                 || Math.max(...xs) >= W - 2 || Math.max(...ys) >= H - 2);
-      warns.push(`孤岛路段 ${i + 1}：${rc[i].length} 格，中心约 (${cx}, ${cy})`
-        + (edge ? "（在城门外沿——门开了但引路没接上城内）" : ""));
+  const rcAll = roadComponents().sort((a, b) => b.length - a.length);
+  // **城内**路段数：城墙（= / G）围出的区域内算"城内"；只看城外的段不算"走不通"
+  const mainSet = new Set(rcAll.length ? rcAll[0].map((p) => p[0] + "," + p[1]) : []);
+  const segInfo = [];
+  for (let i = 0; i < rcAll.length; i++) {
+    const c = rcAll[i];
+    const xs = c.map((p) => p[0]), ys = c.map((p) => p[1]);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs);
+    const y0 = Math.min(...ys), y1 = Math.max(...ys);
+    // "在城内"粗判：段的格心上下都能碰到城墙/门
+    const cy = Math.round(ys.reduce((a, b) => a + b, 0) / ys.length);
+    const cx = Math.round(xs.reduce((a, b) => a + b, 0) / xs.length);
+    let up = false, dn = false;
+    for (let yy = cy - 1; yy >= 0; yy--) if (grid[yy][cx] === "=" || grid[yy][cx] === "G") { up = true; break; }
+    for (let yy = cy + 1; yy < H; yy++) if (grid[yy][cx] === "=" || grid[yy][cx] === "G") { dn = true; break; }
+    const inside = up && dn;
+    segInfo.push({ i, n: c.length, cx, cy, inside, x0, x1, y0, y1 });
+  }
+  const insideSegs = segInfo.filter((s) => s.inside);
+  if (insideSegs.length > 1) {
+    const bad = insideSegs.slice(1);
+    errs.push(`**城内**道路分成 ${insideSegs.length} 段互不相通（最大一段 ${insideSegs[0].n} 格）——城内走不通`);
+    for (const s of bad) {
+      warns.push(`城内孤岛路段：${s.n} 格，中心约 (${s.cx}, ${s.cy}) —— 点「清理孤岛/补门路」可接回`);
     }
   }
-  const mustRoad = { M: "坊市", I: "客栈", L: "藏经阁", p: "广场", R: "静室" };
-  for (const [ch, nm] of Object.entries(mustRoad)) {
-    let tot = 0, bad = 0;
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      if (grid[y][x] !== ch) continue;
-      tot++;
-      let ok = false;
-      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (isRoad(x + dx, y + dy)) ok = true;
-      if (!ok) bad++;
-    }
-    if (bad) warns.push(`${nm}：${bad}/${tot} 格两格内没有路（玩家走不到）`);
+  // 城外的碎段只作提示（城门外沿的引路本就该独立，不算错）
+  const outsideSegs = segInfo.filter((s) => !s.inside);
+  if (outsideSegs.length) {
+    warns.push(`城外有 ${outsideSegs.length} 段短引路（${outsideSegs.map((s) => s.n + "格@(" + s.cx + "," + s.cy + ")").join("、")}）`
+      + `——若想让城门内外连成一体，可点「清理孤岛/补门路」接上；不接也不影响城内通行`);
+  }
+  // 设施可达性：**按设施整体判**（大客栈内部格子离路远是正常的，只要外沿挨路就能进）
+  // 早期版本逐格判 → 3×6 客栈内部格子全报"走不到"，是假警报。
+  const facs = facilitiesDetailed();
+  const unreach = facs.filter((f) => !f.onRoad);
+  for (const f of unreach) {
+    warns.push(`${f.name} @(${f.bbox[0]},${f.bbox[1]}) 共 ${f.size} 格：**整个设施**两格内没有路（玩家进不去）`);
   }
   let holes = 0;
   for (let x = 2; x < W - 2; x++) { if (grid[2][x] === "+") holes++; if (grid[H - 3][x] === "+") holes++; }
@@ -820,29 +833,52 @@ function diagnose() {
   }
   // 设施连通块统计（与引擎 content/town_layouts.py 同口径）
   const fac = facilityCounts();
-  return { errs, warns, comps, gates, emptyRatio: empty / (W * H), fac };
+  const insideSegN = insideSegs.length;
+  return { errs, warns, comps, insideSegs: insideSegN, gates,
+           emptyRatio: empty / (W * H), fac, facDetail: facs };
 }
-function facilityCounts() {
-  const chars = ["M", "I", "L", "R", "p"];
-  const names = { M: "坊市", I: "客栈", L: "藏经阁", R: "静室", p: "广场" };
-  const out = {};
-  for (const ch of chars) {
+/** 设施（按连通块）明细：每个设施的面积、包围盒、整体是否贴路。
+ *
+ *  与引擎 content/town_layouts.py 的 facilities() **同口径**：
+ *  4 邻接洪泛合并（占地 3×3 也只算一处），`onRoad` 判"整个设施**有没有任意一格**挨路"。
+ */
+function facilitiesDetailed() {
+  const chars = [["M", "坊市"], ["I", "客栈"], ["L", "藏经阁"], ["R", "静室"], ["p", "广场"]];
+  const isRoad = (x, y) => at(x, y) === "+";
+  const out = [];
+  for (const [ch, nm] of chars) {
     const seen = Array.from({ length: H }, () => new Array(W).fill(false));
-    let n = 0, cells = 0;
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       if (grid[y][x] !== ch || seen[y][x]) continue;
-      n++; const st = [[x, y]]; seen[y][x] = true;
+      const st = [[x, y]], cells = [];
+      seen[y][x] = true;
       while (st.length) {
-        const [a, b] = st.pop(); cells++;
+        const [a, b] = st.pop();
+        cells.push([a, b]);
         for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
           const nx = a + dx, ny = b + dy;
           if (nx < 0 || ny < 0 || nx >= W || ny >= H || seen[ny][nx] || grid[ny][nx] !== ch) continue;
           seen[ny][nx] = true; st.push([nx, ny]);
         }
       }
+      const xs = cells.map((c) => c[0]), ys = cells.map((c) => c[1]);
+      let onRoad = false;
+      for (const [cx, cy] of cells) {
+        for (let dy = -2; dy <= 2 && !onRoad; dy++) for (let dx = -2; dx <= 2; dx++) {
+          if (isRoad(cx + dx, cy + dy)) { onRoad = true; break; }
+        }
+        if (onRoad) break;
+      }
+      out.push({ ch, name: nm, size: cells.length, cells,
+                 bbox: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
+                 onRoad });
     }
-    if (n) out[names[ch]] = n;
   }
+  return out;
+}
+function facilityCounts() {
+  const out = {};
+  for (const f of facilitiesDetailed()) out[f.name] = (out[f.name] || 0) + 1;
   return out;
 }
 document.getElementById("check").onclick = () => {
@@ -850,8 +886,9 @@ document.getElementById("check").onclick = () => {
   if (!d.errs.length) L.push(`<div class="ok">✓ 无硬伤</div>`);
   d.errs.forEach((e) => L.push(`<div class="err">✗ ${e}</div>`));
   d.warns.forEach((w) => L.push(`<div class="warn">! ${w}</div>`));
-  L.push(`<div>道路连通段：${d.comps} ｜ 城门：${d.gates} ｜ 空旷率：${(d.emptyRatio * 100).toFixed(0)}%</div>`);
-  L.push(`<div>设施（按连通块）：${Object.entries(d.fac).map(([k, v]) => k + " " + v + " 处").join(" ｜ ") || "无"}</div>`);
+  L.push(`<div>道路连通段：${d.comps} 段（其中城内 ${d.insideSegs} 段）｜ 城门：${d.gates} ｜ 空旷率：${(d.emptyRatio * 100).toFixed(0)}%</div>`);
+  L.push(`<div>设施：${Object.entries(d.fac).map(([k, v]) => k + " " + v + " 处").join(" ｜ ") || "无"}`
+    + (d.facDetail.length ? ` ｜ 最大 ${Math.max(...d.facDetail.map((f) => f.size))} 格` : "") + `</div>`);
   el.innerHTML = L.join("");
 };
 function exportJson() {
@@ -859,6 +896,7 @@ function exportJson() {
   const counts = {}; r.forEach((s) => [...s].forEach((c) => { counts[c] = (counts[c] || 0) + 1; }));
   const zc = {}; zr.forEach((s) => [...s].forEach((c) => { if (c !== " ") zc[c] = (zc[c] || 0) + 1; }));
   const d = diagnose();
+  const facs = facilitiesDetailed();
   const obj = {
     name: (document.getElementById("townName").value || "").trim() || "青石镇",
     tier: document.getElementById("townTier").value,
@@ -867,6 +905,15 @@ function exportJson() {
     zone_legend: Object.entries(ZONE).filter(([k]) => k).map(([k, v]) => `${k} = ${v.name}`),
     counts, zone_counts: zc,
     facilities: d.fac,
+    // 每个设施的占地与可达性（引擎按此生成町内设施点，尺寸/位置都要）
+    facility_detail: facs.map((f) => ({
+      kind: f.ch, name: f.name, size: f.size,
+      bbox: f.bbox, center: [
+        Math.round((f.bbox[0] + f.bbox[2]) / 2),
+        Math.round((f.bbox[1] + f.bbox[3]) / 2),
+      ],
+      on_road: f.onRoad,
+    })),
     diagnostics: { errors: d.errs, warnings: d.warns, road_components: d.comps, gates: d.gates },
     rows: r, zone_rows: zr,
   };

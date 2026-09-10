@@ -31,7 +31,11 @@ class Facility:
 
     - `cells` = 占用的格子（可能很多格，甚至 3×3）；
     - `x`/`y` = **代表点**（取格心均值，用于导航与显示）；
-    - `on_road` = 是否有格子在道路两格内（体检项：走不到 = 假设施）。
+    - `on_road` = **整个设施**是否有格子在道路两格内（判定粒度 = 设施，不是逐格）。
+
+    ⚠️ 判定粒度说明：早期版本逐格判"这格 2 格内有路吗"，于是**大客栈内部的格子全被判为
+    "走不到"**（3×6 客栈的中心格离路 4 格，但玩家从外沿格子就能进去）——那是**假警报**。
+    正确口径：只要设施**外沿**有一格挨着路，整个设施就可进入。
     """
     kind: str                 # M/I/L/R/p/G
     name: str                 # 坊市 / 客栈 / …
@@ -43,6 +47,13 @@ class Facility:
     @property
     def size(self) -> int:
         return len(self.cells)
+
+    @property
+    def bbox(self) -> tuple:
+        """占地范围 (x0, y0, x1, y1)。"""
+        xs = [c[0] for c in self.cells]
+        ys = [c[1] for c in self.cells]
+        return (min(xs), min(ys), max(xs), max(ys))
 
 
 @dataclass(frozen=True)
@@ -152,8 +163,14 @@ class TownLayout:
         t = Counter("".join(self.rows))
         z = Counter("".join(self.zone_rows)) if self.zone_rows else Counter()
         z.pop(" ", None)
-        fac = Counter(f.name for f in self.facilities())
-        return {"tiles": dict(t), "zones": dict(z), "facilities": dict(fac)}
+        facs = self.facilities()
+        fac = Counter(f.name for f in facs)
+        return {
+            "tiles": dict(t), "zones": dict(z), "facilities": dict(fac),
+            "facility_sizes": {f.name + "@%d,%d" % (f.bbox[0], f.bbox[1]): f.size for f in facs},
+            "unreachable": [f.name + "@%d,%d" % (f.bbox[0], f.bbox[1])
+                            for f in facs if not f.on_road],
+        }
 
 
 def _parse_legend(items) -> dict:
