@@ -2,18 +2,18 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>一世问道 · 城镇线路图标注工具</title>
+<title>一世问道 · 城镇线路图标注工具 v2</title>
 <style>
   :root { --bg:#14161a; --panel:#1c1f24; --line:#2c3138; --ink:#d9d4c8; --dim:#8b8577;
           --gold:#d8b26a; --blue:#6aa8d8; --red:#c96a6a; --green:#6cc07a; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
          font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif; display:flex; height:100vh; }
-  aside { width:300px; flex:0 0 300px; background:var(--panel); border-right:1px solid var(--line);
+  aside { width:318px; flex:0 0 318px; background:var(--panel); border-right:1px solid var(--line);
           padding:12px; overflow:auto; }
   main { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:12px; overflow:auto; }
-  h1 { font-size:15px; margin:0 0 8px; color:var(--gold); }
-  h2 { font-size:12px; margin:14px 0 6px; color:var(--dim); font-weight:600; letter-spacing:.5px; }
+  h1 { font-size:15px; margin:0 0 6px; color:var(--gold); }
+  h2 { font-size:12px; margin:13px 0 6px; color:var(--dim); font-weight:600; letter-spacing:.5px; }
   .pal { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
   .pal button { display:flex; align-items:center; gap:6px; padding:5px 7px; background:#22262c;
                 border:1px solid var(--line); border-radius:6px; color:var(--ink); cursor:pointer;
@@ -25,57 +25,83 @@
   input[type=number], input[type=text], select {
     background:#181b20; border:1px solid var(--line); color:var(--ink); border-radius:5px; padding:4px 6px; width:100%; }
   button.act { background:#2a2f36; border:1px solid var(--line); color:var(--ink); border-radius:6px;
-               padding:6px 9px; cursor:pointer; }
+               padding:6px 9px; cursor:pointer; font-size:12px; }
   button.act:hover { border-color:var(--gold); }
   button.act.primary { background:#3a3222; border-color:var(--gold); color:var(--gold); }
+  .modes { display:flex; gap:0; margin:8px 0; }
+  .modes button { flex:1; padding:6px; background:#22262c; border:1px solid var(--line);
+                  color:var(--dim); cursor:pointer; font-size:12px; }
+  .modes button:first-child { border-radius:6px 0 0 6px; }
+  .modes button:last-child { border-radius:0 6px 6px 0; }
+  .modes button.on { background:#2a2f36; color:var(--gold); border-color:var(--gold); }
+  .cvwrap { position:relative; }
   canvas { background:#fff; border:1px solid var(--line); border-radius:6px; image-rendering:pixelated;
            cursor:crosshair; touch-action:none; }
   .hint { color:var(--dim); font-size:11.5px; line-height:1.7; }
   pre { background:#181b20; border:1px solid var(--line); border-radius:6px; padding:8px;
-        max-height:210px; overflow:auto; font-size:11px; color:var(--dim); white-space:pre; }
+        max-height:200px; overflow:auto; font-size:11px; color:var(--dim); white-space:pre; }
+  #diag { font-size:11.5px; line-height:1.75; max-height:190px; overflow:auto; }
+  #diag .err { color:var(--red); }
+  #diag .warn { color:var(--gold); }
+  #diag .ok { color:var(--green); }
   .tag { display:inline-block; padding:0 6px; border:1px solid var(--line); border-radius:9px;
          font-size:11px; color:var(--dim); }
 </style>
 </head>
 <body>
 <aside>
-  <h1>城镇线路图标注</h1>
+  <h1>城镇线路图标注 v2</h1>
   <p class="hint">
-    <b>白 = 道路</b>，<b>黑 = 建筑（涂黑）</b>，其余是城门 / 墙 / 坊市等要素。<br>
-    鼠标拖动连续画，右键擦除。导出为字符网格 → 直接当城镇布局模板用。
+    两层：<b>要素层</b>（白=道路、黑=建筑）+ <b>分区层</b>（居民区 / 茶楼 / 坊市… 只留位，不写内容）。<br>
+    左键画、右键擦；画完点<b>体检</b>看有没有断路 / 门后无路 / 孤岛。
   </p>
 
-  <h2>画笔</h2>
-  <div class="pal" id="pal"></div>
+  <div class="modes">
+    <button id="modeTile" class="on">要素层</button>
+    <button id="modeZone">分区层</button>
+  </div>
+
+  <h2 id="palTitle">画笔（要素）</h2>
+  <div class="pal" id="palTile"></div>
+  <div class="pal" id="palZone" style="display:none"></div>
 
   <h2>画布</h2>
-  <div class="row"><label style="flex:0 0 52px">宽</label><input type="number" id="gw" value="48" min="8" max="120"></div>
-  <div class="row"><label style="flex:0 0 52px">高</label><input type="number" id="gh" value="48" min="8" max="120"></div>
-  <div class="row"><label style="flex:0 0 52px">格</label><input type="number" id="gz" value="12" min="6" max="28"></div>
+  <div class="row"><label style="flex:0 0 50px">宽</label><input type="number" id="gw" value="48" min="8" max="120"></div>
+  <div class="row"><label style="flex:0 0 50px">高</label><input type="number" id="gh" value="48" min="8" max="120"></div>
+  <div class="row"><label style="flex:0 0 50px">格</label><input type="number" id="gz" value="12" min="6" max="28"></div>
   <div class="row">
     <button class="act" id="apply">应用尺寸</button>
-    <button class="act" id="clear">清空</button>
+    <button class="act" id="clearTile">清要素</button>
+    <button class="act" id="clearZone">清分区</button>
   </div>
 
   <h2>城镇信息</h2>
-  <div class="row"><label style="flex:0 0 52px">名字</label><input type="text" id="townName" value="青石镇"></div>
-  <div class="row"><label style="flex:0 0 52px">档位</label>
+  <div class="row"><label style="flex:0 0 50px">名字</label><input type="text" id="townName" value="青石镇"></div>
+  <div class="row"><label style="flex:0 0 50px">档位</label>
     <select id="townTier">
       <option value="core">core 核心域</option>
       <option value="near">near 近域</option>
       <option value="outer" selected>outer 外围域</option>
     </select>
   </div>
-  <div class="row"><label style="flex:0 0 52px">道路宽</label><input type="number" id="roadW" value="3" min="1" max="8"></div>
 
-  <h2>生成</h2>
+  <h2>生成器</h2>
+  <div class="row"><label style="flex:0 0 50px">路宽</label><input type="number" id="roadW" value="3" min="1" max="8"></div>
   <div class="row">
-    <button class="act" id="genStreet">十字街骨架</button>
-    <button class="act" id="genRect">环形城墙</button>
+    <button class="act" id="genGrid">正交街网</button>
+    <button class="act" id="genWall">城墙+四门</button>
   </div>
   <div class="row">
-    <button class="act" id="genBlocks">街区内随机建筑</button>
+    <button class="act" id="genBlocks">沿街补建筑</button>
+    <button class="act" id="genZones">按建筑自动分区</button>
   </div>
+  <div class="row">
+    <button class="act" id="genTidy">清理孤岛/补门路</button>
+  </div>
+
+  <h2>体检</h2>
+  <div class="row"><button class="act primary" id="check">运行体检</button></div>
+  <div id="diag" class="hint">（点「运行体检」）</div>
 
   <h2>导出</h2>
   <div class="row">
@@ -86,20 +112,20 @@
 </aside>
 
 <main>
-  <canvas id="cv" width="576" height="576"></canvas>
+  <div class="cvwrap"><canvas id="cv" width="576" height="576"></canvas></div>
   <div class="hint">
-    图例：<span class="tag">. 空 / 未定</span> <span class="tag">+ 道路</span>
-    <span class="tag"># 建筑</span> <span class="tag">G 城门</span>
-    <span class="tag">= 城墙</span> <span class="tag">M 坊市</span>
-    <span class="tag">I 客栈</span> <span class="tag">L 藏经阁</span>
-    <span class="tag">R 静室</span> <span class="tag">W 水渠</span>
+    要素：<span class="tag">+ 道路</span> <span class="tag"># 建筑</span>
+    <span class="tag">G 城门</span> <span class="tag">= 城墙</span>
+    <span class="tag">M 坊市</span> <span class="tag">I 客栈</span>
+    <span class="tag">L 藏经阁</span> <span class="tag">R 静室</span>
     <span class="tag">T 树林</span> <span class="tag">p 广场</span>
+    <span class="tag">（已删水渠：城内水系会断路）</span>
   </div>
 </main>
 
 <script>
-// ---------- 要素表：字符 ↔ 颜色（白=路，黑=建筑） ----------
-const KIND = {
+// ---------- 要素表（白=道路，黑=建筑） ----------
+const TILE = {
   ".": { name:"空 / 未定",   color:"#ffffff" },
   "+": { name:"道路",        color:"#f2f2f2" },
   "#": { name:"建筑（涂黑）", color:"#1b1b1b" },
@@ -109,41 +135,52 @@ const KIND = {
   "I": { name:"客栈",        color:"#6aa8d8" },
   "L": { name:"藏经阁",      color:"#a87ad8" },
   "R": { name:"静室",        color:"#6cc07a" },
-  "W": { name:"水渠",        color:"#7fc4e8" },
   "T": { name:"树林",        color:"#2f6b3a" },
   "p": { name:"广场",        color:"#e8e0c0" },
 };
-const ORDER = [".", "+", "#", "G", "=", "M", "I", "L", "R", "W", "T", "p"];
+// 分区表：只"留位"，内容以后填。颜色淡、半透明，叠在要素层下面
+const ZONE = {
+  "":  { name:"（无）",      color:"#00000000" },
+  "r": { name:"居民区",      color:"#c9a22755" },
+  "t": { name:"茶楼 / 餐馆", color:"#d8836a55" },
+  "m": { name:"坊市 / 商铺", color:"#d8b26a66" },
+  "c": { name:"寺观 / 祠堂", color:"#a87ad855" },
+  "w": { name:"作坊 / 工坊", color:"#8b857755" },
+  "g": { name:"园林 / 空地", color:"#6cc07a55" },
+  "o": { name:"衙署 / 广场", color:"#6aa8d855" },
+  "s": { name:"仓储 / 货栈", color:"#b0a08055" },
+};
+const TILE_ORDER = [".", "+", "#", "G", "=", "M", "I", "L", "R", "T", "p"];
+const ZONE_ORDER = ["", "r", "t", "m", "c", "w", "g", "o", "s"];
 
 let W = 48, H = 48, Z = 12;
-let grid = [];
-let brush = "+";
-let drawing = false, erasing = false;
+let grid = [], zones = [];
+let mode = "tile";
+let brushTile = "+", brushZone = "r";
+let drawing = false;
 
 const cv = document.getElementById("cv");
 const ctx = cv.getContext("2d");
 
 function blank() {
-  grid = [];
-  for (let y = 0; y < H; y++) grid.push(new Array(W).fill("."));
+  grid = []; zones = [];
+  for (let y = 0; y < H; y++) { grid.push(new Array(W).fill(".")); zones.push(new Array(W).fill("")); }
 }
-function resizeCanvas() {
-  cv.width = W * Z; cv.height = H * Z;
-  draw();
-}
-function paint(cx, cy) {
-  if (cx < 0 || cy < 0 || cx >= W || cy >= H) return;
-  const ch = erasing ? "." : brush;
-  if (grid[cy][cx] === ch) return;
-  grid[cy][cx] = ch;
-  drawCell(cx, cy);
-}
+function resizeCanvas() { cv.width = W * Z; cv.height = H * Z; draw(); }
 function drawCell(cx, cy) {
   const ch = grid[cy][cx];
-  const c = (KIND[ch] || KIND["."]).color;
+  const zn = zones[cy][cx];
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(cx * Z, cy * Z, Z, Z);
-  if (ch !== ".") { ctx.fillStyle = c; ctx.fillRect(cx * Z + (ch === "#" ? 0 : 1), cy * Z + (ch === "#" ? 0 : 1), Z - (ch === "#" ? 0 : 2), Z - (ch === "#" ? 0 : 2)); }
+  if (zn) { ctx.fillStyle = ZONE[zn].color; ctx.fillRect(cx * Z, cy * Z, Z, Z); }
+  if (ch !== ".") {
+    ctx.fillStyle = TILE[ch].color;
+    const inset = ch === "#" ? 0 : 1;
+    ctx.fillRect(cx * Z + inset, cy * Z + inset, Z - inset * 2, Z - inset * 2);
+    if (zn && ch === "#") { // 建筑上叠淡色，仍看得出分区
+      ctx.fillStyle = ZONE[zn].color; ctx.fillRect(cx * Z, cy * Z, Z, Z);
+    }
+  }
   ctx.strokeStyle = "rgba(0,0,0,.08)";
   ctx.strokeRect(cx * Z + .5, cy * Z + .5, Z - 1, Z - 1);
 }
@@ -151,19 +188,51 @@ function draw() {
   ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) drawCell(x, y);
 }
-
-// ---------- 画笔面板 ----------
-const pal = document.getElementById("pal");
-ORDER.forEach((ch) => {
-  const b = document.createElement("button");
-  b.innerHTML = `<span class="sw" style="background:${KIND[ch].color}"></span>${ch === "." ? "擦除" : ch} · ${KIND[ch].name}`;
-  b.onclick = () => { brush = ch; redrawPal(); };
-  b.dataset.ch = ch;
-  pal.appendChild(b);
-});
-function redrawPal() {
-  [...pal.children].forEach((b) => b.classList.toggle("on", b.dataset.ch === brush));
+function paint(cx, cy, erase) {
+  if (cx < 0 || cy < 0 || cx >= W || cy >= H) return;
+  if (mode === "tile") {
+    const ch = erase ? "." : brushTile;
+    if (grid[cy][cx] === ch) return;
+    grid[cy][cx] = ch;
+    if (ch !== "." && ch !== "+") zones[cy][cx] = "";   // 要素覆盖分区
+  } else {
+    const zn = erase ? "" : brushZone;
+    if (zones[cy][cx] === zn) return;
+    zones[cy][cx] = zn;
+  }
+  drawCell(cx, cy);
 }
+
+// ---------- 面板 ----------
+function buildPal(el, table, order, get, set) {
+  order.forEach((k) => {
+    const b = document.createElement("button");
+    b.dataset.k = k;
+    const nm = table[k].name;
+    b.innerHTML = `<span class="sw" style="background:${table[k].color || "#ffffff"}"></span>${k === "." || k === "" ? "擦除" : k} · ${nm}`;
+    b.onclick = () => { set(k); redrawPal(); };
+    el.appendChild(b);
+  });
+}
+const palTile = document.getElementById("palTile"), palZone = document.getElementById("palZone");
+buildPal(palTile, TILE, TILE_ORDER, () => brushTile, (k) => (brushTile = k));
+buildPal(palZone, ZONE, ZONE_ORDER, () => brushZone, (k) => (brushZone = k));
+palZone.dataset.k = "";
+function redrawPal() {
+  [...palTile.children].forEach((b) => b.classList.toggle("on", mode === "tile" && b.dataset.k === brushTile));
+  [...palZone.children].forEach((b) => b.classList.toggle("on", mode === "zone" && b.dataset.k === brushZone));
+}
+function setMode(m) {
+  mode = m;
+  document.getElementById("modeTile").classList.toggle("on", m === "tile");
+  document.getElementById("modeZone").classList.toggle("on", m === "zone");
+  document.getElementById("palTitle").textContent = m === "tile" ? "画笔（要素）" : "画笔（分区 · 只留位）";
+  palTile.style.display = m === "tile" ? "grid" : "none";
+  palZone.style.display = m === "zone" ? "grid" : "none";
+  redrawPal();
+}
+document.getElementById("modeTile").onclick = () => setMode("tile");
+document.getElementById("modeZone").onclick = () => setMode("zone");
 
 // ---------- 画布交互 ----------
 function cellOf(e) {
@@ -172,72 +241,245 @@ function cellOf(e) {
 }
 cv.addEventListener("contextmenu", (e) => e.preventDefault());
 cv.addEventListener("pointerdown", (e) => {
-  drawing = true; erasing = (e.button === 2) || brush === ".";
+  drawing = true;
   cv.setPointerCapture(e.pointerId);
-  const [x, y] = cellOf(e); paint(x, y);
+  const [x, y] = cellOf(e);
+  paint(x, y, e.button === 2 || (mode === "tile" && brushTile === ".") || (mode === "zone" && brushZone === ""));
 });
-cv.addEventListener("pointermove", (e) => { if (drawing) { const [x, y] = cellOf(e); paint(x, y); } });
-cv.addEventListener("pointerup", () => { drawing = false; erasing = false; });
+cv.addEventListener("pointermove", (e) => {
+  if (!drawing) return;
+  const [x, y] = cellOf(e);
+  paint(x, y, (e.buttons & 2) !== 0 || (mode === "tile" && brushTile === ".") || (mode === "zone" && brushZone === ""));
+});
+cv.addEventListener("pointerup", () => { drawing = false; });
 
 // ---------- 生成器 ----------
-const W2 = () => Math.max(1, parseInt(document.getElementById("roadW").value || "3", 10));
-function street() {
-  const w = W2(), cx = (W / 2) | 0, cy = (H / 2) | 0;
-  for (let y = 0; y < H; y++) for (let d = 0; d < w; d++)
-    if (cx - ((w / 2) | 0) + d >= 0 && cx - ((w / 2) | 0) + d < W) grid[y][cx - ((w / 2) | 0) + d] = "+";
-  for (let x = 0; x < W; x++) for (let d = 0; d < w; d++)
-    if (cy - ((w / 2) | 0) + d >= 0 && cy - ((w / 2) | 0) + d < H) grid[cy - ((w / 2) | 0) + d][x] = "+";
+const RW = () => Math.max(1, parseInt(document.getElementById("roadW").value || "3", 10));
+const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? "=" : grid[y][x]);
+function setTile(x, y, ch) { if (x >= 0 && y >= 0 && x < W && y < H) grid[y][x] = ch; }
+
+/** 正交街网：主干 2 条 + 每隔 gap 条支路（比纯十字更像真镇子） */
+function genGridRoads() {
+  const w = RW(), gap = 9;
+  const cx = (W / 2) | 0, cy = (H / 2) | 0;
+  const band = (c, len, vert) => {
+    for (let i = 0; i < len; i++) {
+      const p = c - ((w / 2) | 0) + i;
+      for (let t = 0; t < (vert ? H : W); t++) {
+        if (vert) setTile(p, t, "+"); else setTile(t, p, "+");
+      }
+    }
+  };
+  band(cx, w, true); band(cy, w, false);
+  for (let x = gap; x < W - 2; x += gap) if (Math.abs(x - cx) > w) band(x, Math.min(w, 2), true);
+  for (let y = gap; y < H - 2; y += gap) if (Math.abs(y - cy) > w) band(y, Math.min(w, 2), false);
   draw();
 }
-function rectWall() {
-  const m = 3;
-  for (let x = m; x < W - m; x++) { grid[m][x] = "="; grid[H - m - 1][x] = "="; }
-  for (let y = m; y < H - m; y++) { grid[y][m] = "="; grid[y][W - m - 1] = "="; }
-  grid[m][(W / 2) | 0] = "G"; grid[H - m - 1][(W / 2) | 0] = "G";
-  grid[(H / 2) | 0][m] = "G"; grid[(H / 2) | 0][W - m - 1] = "G";
-  // 城门到十字街的引路
-  const w = W2(), cx = (W / 2) | 0, cy = (H / 2) | 0;
-  for (let y = m; y <= cy; y++) for (let d = 0; d < w; d++) grid[y][cx - ((w / 2) | 0) + d] = "+";
-  for (let y = cy; y < H - m; y++) for (let d = 0; d < w; d++) grid[y][cx - ((w / 2) | 0) + d] = "+";
-  for (let x = m; x <= cx; x++) for (let d = 0; d < w; d++) grid[cy - ((w / 2) | 0) + d][x] = "+";
-  for (let x = cx; x < W - m; x++) for (let d = 0; d < w; d++) grid[cy - ((w / 2) | 0) + d][x] = "+";
+
+/** 城墙 + 四门：门开在**主干道端点**，并把门内外接上路（修"门后无路"） */
+function genWall() {
+  const m = 2, w = RW();
+  const cx = (W / 2) | 0, cy = (H / 2) | 0;
+  for (let x = m; x < W - m; x++) { setTile(x, m, "="); setTile(x, H - m - 1, "="); }
+  for (let y = m; y < H - m; y++) { setTile(m, y, "="); setTile(W - m - 1, y, "="); }
+  // 门开在主街与墙的交点
+  for (let d = 0; d < Math.max(1, w - 1); d++) {
+    setTile(cx - ((w / 2) | 0) + d, m, "G");
+    setTile(cx - ((w / 2) | 0) + d, H - m - 1, "G");
+    setTile(m, cy - ((w / 2) | 0) + d, "G");
+    setTile(W - m - 1, cy - ((w / 2) | 0) + d, "G");
+  }
+  // 门内外接路
+  for (let d = 0; d < w; d++) {
+    const px = cx - ((w / 2) | 0) + d, py = cy - ((w / 2) | 0) + d;
+    for (let y = m; y <= cy; y++) setTile(px, y, "+");
+    for (let y = cy; y < H - m; y++) setTile(px, y, "+");
+    for (let x = m; x <= cx; x++) setTile(x, py, "+");
+    for (let x = cx; x < W - m; x++) setTile(x, py, "+");
+    for (let y = 0; y < m; y++) setTile(px, y, "+");            // 门外
+    for (let y = H - m; y < H; y++) setTile(px, y, "+");
+    for (let x = 0; x < m; x++) setTile(x, py, "+");
+    for (let x = W - m; x < W; x++) setTile(x, py, "+");
+  }
+  // 补四角
+  setTile(m, m, "="); setTile(W - m - 1, m, "="); setTile(m, H - m - 1, "="); setTile(W - m - 1, H - m - 1, "=");
   draw();
 }
-function blocks() {
-  // 在"离路 ≥1 格"的空地上撒建筑（确定性伪随机，便于复现）
+
+/** 沿街补建筑：只在"贴着路且留出人行缝"的格子上放，避免墙贴墙的闷块 */
+function genBlocks() {
   let s = 20260910;
   const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+  const isRoad = (x, y) => at(x, y) === "+" || at(x, y) === "G";
   for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
-    if (grid[y][x] !== ".") continue;
-    let nearRoad = false;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++)
-      if (grid[y + dy][x + dx] === "+") nearRoad = true;
-    if (!nearRoad && rnd() < 0.55) grid[y][x] = "#";
+    if (grid[y][x] !== "." || zones[y][x]) continue;
+    let touch = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (isRoad(x + dx, y + dy)) touch++;
+    if (touch === 0) continue;
+    // 与已有建筑至少隔 1 格（除同排连续）
+    let adjB = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (at(x + dx, y + dy) === "#") adjB++;
+    if (adjB >= 4) continue;
+    if (rnd() < 0.62) setTile(x, y, "#");
   }
   draw();
 }
 
-// ---------- 导出 ----------
-function toRows() { return grid.map((r) => r.join("")); }
-function legend() {
-  const used = new Set(grid.flat());
-  return ORDER.filter((c) => used.has(c)).map((c) => `${c} = ${KIND[c].name}`);
+/** 按建筑聚集区自动分区：只留位、不写内容（用户要的"居民区/茶楼"） */
+function genZones() {
+  // 简单分片：以主干道为界划 4 象限；再按"离中心远近"给不同性质
+  const cx = (W / 2) | 0, cy = (H / 2) | 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (grid[y][x] === "=" || grid[y][x] === "G") continue;
+    if (zones[y][x]) continue;
+    const near = Math.abs(x - cx) + Math.abs(y - cy);
+    let zn = "r";
+    if (near < 6) zn = "m";                 // 镇心：商铺
+    else if (near < 12) zn = "t";           // 内圈：茶楼餐馆
+    else if (x < cx && y < cy) zn = "w";    // 西北：作坊
+    else if (x > cx && y < cy) zn = "c";    // 东北：寺观
+    else if (x < cx && y > cy) zn = "s";    // 西南：仓储
+    else zn = "r";                          // 东南：居民
+    zones[y][x] = zn;
+  }
+  draw();
 }
+
+/** 清理：孤岛建筑（四邻无路无建筑）删掉；门后无路则补一格路 */
+function genTidy() {
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (grid[y][x] === "#") {
+      let any = false;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const c = at(x + dx, y + dy);
+        if (c === "+" || c === "#" || c === "G") any = true;
+      }
+      if (!any) grid[y][x] = ".";
+    }
+    if (grid[y][x] === "G") {                      // 门必须在墙线上，且内外各有一格通
+      const vertical = (y === 2 || y === H - 3);
+      if (vertical) { setTile(x, y - 1, at(x, y - 1) === "=" ? "+" : at(x, y - 1));
+                      setTile(x, y + 1, at(x, y + 1) === "=" ? "+" : at(x, y + 1)); }
+      else { setTile(x - 1, y, at(x - 1, y) === "=" ? "+" : at(x - 1, y));
+             setTile(x + 1, y, at(x + 1, y) === "=" ? "+" : at(x + 1, y)); }
+    }
+  }
+  // 广场 / 坊市 必须贴路
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const c = grid[y][x];
+    if (c !== "M" && c !== "p" && c !== "I" && c !== "L") continue;
+    let road = false;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (at(x + dx, y + dy) === "+") road = true;
+    if (!road) {                                   // 就近拉一格路过去
+      let done = false;
+      for (let r = 1; r <= 3 && !done; r++) {
+        for (const [dx, dy] of [[r,0],[-r,0],[0,r],[0,-r]]) {
+          if (at(x + dx, y + dy) === "+") { setTile(x + Math.sign(dx), y + Math.sign(dy), "+"); done = true; break; }
+        }
+      }
+    }
+  }
+  draw();
+}
+
+// ---------- 体检 ----------
+function diagnose() {
+  const errs = [], warns = [];
+  const isRoad = (x, y) => at(x, y) === "+";
+  // 1) 城门连通性
+  let gates = 0, badGates = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (grid[y][x] !== "G") continue;
+    gates++;
+    const vert = (y === 2 || y === H - 3);
+    const a = vert ? (isRoad(x, y - 1) || isRoad(x, y + 1)) : (isRoad(x - 1, y) || isRoad(x + 1, y));
+    if (!a) badGates++;
+  }
+  if (badGates) errs.push(`${badGates}/${gates} 个城门内侧没有路（人进门撞墙）`);
+  // 2) 道路连通分量（门 / 坊市 / 客栈 必须落在同一分量）
+  const seen = Array.from({ length: H }, () => new Array(W).fill(false));
+  let comps = 0, biggest = 0;
+  const key = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (isRoad(x, y) && !seen[y][x]) {
+    comps++; let n = 0; const st = [[x, y]]; seen[y][x] = true;
+    while (st.length) {
+      const [a, b] = st.pop(); n++;
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx = a + dx, ny = b + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H || seen[ny][nx] || !isRoad(nx, ny)) continue;
+        seen[ny][nx] = true; st.push([nx, ny]);
+      }
+    }
+    if (n > biggest) { biggest = n; key[0] = x; key[1] = y; }
+  }
+  if (comps > 1) errs.push(`道路分成 ${comps} 段互不相通（最大一段 ${biggest} 格）——城内走不通`);
+  // 3) 设施贴不贴路
+  const mustRoad = { M: "坊市", I: "客栈", L: "藏经阁", p: "广场", R: "静室" };
+  for (const [ch, nm] of Object.entries(mustRoad)) {
+    let tot = 0, bad = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (grid[y][x] !== ch) continue;
+      tot++;
+      let ok = false;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (isRoad(x + dx, y + dy)) ok = true;
+      if (!ok) bad++;
+    }
+    if (bad) warns.push(`${nm}：${bad}/${tot} 格两格内没有路（玩家走不到）`);
+  }
+  // 4) 城墙是否被路穿断
+  let holes = 0;
+  for (let x = 2; x < W - 2; x++) {
+    if (grid[2][x] === "+") holes++;
+    if (grid[H - 3][x] === "+") holes++;
+  }
+  for (let y = 2; y < H - 2; y++) {
+    if (grid[y][2] === "+") holes++;
+    if (grid[y][W - 3] === "+") holes++;
+  }
+  if (holes) errs.push(`城墙被道路直接穿过 ${holes} 处（应改为开门 G）`);
+  // 5) 空旷度
+  let empty = 0, total = W * H;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (grid[y][x] === "." && !zones[y][x]) empty++;
+  if (empty / total > 0.5) warns.push(`空旷：${(empty / total * 100).toFixed(0)}% 的格子既无要素也无分区（建议补分区）`);
+  // 6) 分区覆盖
+  const zc = {};
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (zones[y][x]) zc[zones[y][x]] = (zc[zones[y][x]] || 0) + 1;
+  return { errs, warns, comps, gates, emptyRatio: empty / total, zc };
+}
+document.getElementById("check").onclick = () => {
+  const d = diagnose();
+  const el = document.getElementById("diag");
+  const lines = [];
+  if (!d.errs.length) lines.push(`<div class="ok">✓ 无硬伤</div>`);
+  d.errs.forEach((e) => lines.push(`<div class="err">✗ ${e}</div>`));
+  d.warns.forEach((w) => lines.push(`<div class="warn">! ${w}</div>`));
+  lines.push(`<div>道路连通段：${d.comps} ｜ 城门：${d.gates} ｜ 空旷率：${(d.emptyRatio * 100).toFixed(0)}%</div>`);
+  if (Object.keys(d.zc).length) {
+    lines.push(`<div>分区：${Object.entries(d.zc).map(([k, v]) => ZONE[k].name + " " + v).join(" ｜ ")}</div>`);
+  }
+  el.innerHTML = lines.join("");
+};
+
+// ---------- 导出 ----------
+function rows() { return grid.map((r) => r.join("")); }
+function zoneRows() { return zones.map((r) => r.map((c) => c || " ").join("")); }
 function exportJson() {
-  const rows = toRows();
-  const counts = {};
-  rows.forEach((r) => [...r].forEach((c) => { counts[c] = (counts[c] || 0) + 1; }));
+  const r = rows(), zr = zoneRows();
+  const counts = {}; r.forEach((s) => [...s].forEach((c) => { counts[c] = (counts[c] || 0) + 1; }));
+  const d = diagnose();
   const obj = {
-    name: document.getElementById("townName").value.trim() || "无名镇",
-    tier: document.getElementById("townTier").value,
-    w: W, h: H,
-    road_width: W2(),
-    legend: legend(),
+    name: (document.getElementById("townName")?.value || "").trim() || "青石镇",
+    tier: document.getElementById("townTier")?.value || "outer",
+    w: W, h: H, road_width: RW(),
+    legend: TILE_ORDER.filter((c) => c in counts).map((c) => `${c} = ${TILE[c].name}`),
+    zone_legend: Object.entries(ZONE).filter(([k]) => k).map(([k, v]) => `${k} = ${v.name}`),
+    zone_counts: (() => { const c = {}; zones.flat().forEach((z) => { if (z) c[z] = (c[z] || 0) + 1; }); return c; })(),
     counts,
-    rows,
+    diagnostics: { errors: d.errs, warnings: d.warns, road_components: d.comps, gates: d.gates },
+    rows: r,
+    zone_rows: zr,
   };
   document.getElementById("out").textContent = JSON.stringify(obj, null, 2);
-  return obj;
 }
 document.getElementById("apply").onclick = () => {
   W = Math.max(8, Math.min(120, parseInt(document.getElementById("gw").value, 10) || 48));
@@ -249,16 +491,19 @@ document.getElementById("gz").onchange = () => {
   Z = Math.max(6, Math.min(28, parseInt(document.getElementById("gz").value, 10) || 12));
   resizeCanvas();
 };
-document.getElementById("clear").onclick = () => { blank(); draw(); };
-document.getElementById("genStreet").onclick = street;
-document.getElementById("genRect").onclick = rectWall;
-document.getElementById("genBlocks").onclick = blocks;
+document.getElementById("clearTile").onclick = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) grid[y][x] = "."; draw(); };
+document.getElementById("clearZone").onclick = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) zones[y][x] = ""; draw(); };
+document.getElementById("genGrid").onclick = genGridRoads;
+document.getElementById("genWall").onclick = genWall;
+document.getElementById("genBlocks").onclick = genBlocks;
+document.getElementById("genZones").onclick = genZones;
+document.getElementById("genTidy").onclick = genTidy;
 document.getElementById("export").onclick = exportJson;
 document.getElementById("copy").onclick = async () => {
   try { await navigator.clipboard.writeText(document.getElementById("out").textContent); } catch {}
 };
 
-blank(); redrawPal(); resizeCanvas();
+blank(); setMode("tile"); resizeCanvas();
 </script>
 </body>
 </html>
