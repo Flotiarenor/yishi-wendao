@@ -111,6 +111,23 @@ const px = (x: number, y: number) => {
   const sy = -((y - (mv.value?.self.y ?? 0)) / R.value) * half;
   return [SIZE / 2 + sx, SIZE / 2 + sy] as const;
 };
+/**
+ * 舆图底图 URL（P4：由 Python/pygame 渲染，浏览器只负责显示）。
+ *
+ * 为什么把底图交给后端：地形底图要画 16 万格的地貌母题（海/山/沙/草/林 + 纸纹），
+ * 浏览器里逐格绘制会卡；后端**逐格扫描**渲染一张 1200px 图只要 ~0.1s（有 LRU 缓存）。
+ * SVG 层继续负责**交互**（点选/悬停/右键/候选路径）——两者分工：底图静态、叠加层动态。
+ */
+const baseSrc = computed(() => {
+  const m = mv.value;
+  if (!m || m.map_level === "none") return "";
+  const center = { x: m.self.x, y: m.self.y };   // 始终以玩家为中心（跟着右键点走会让整图跳动）
+  const span = Math.round(R.value * 2);
+  // style：舆图风做底（未探索区）；将来按 discovered 分区时再叠实景层
+  return `/api/map/img?run_id=${encodeURIComponent(s.runId ?? "")}` +
+    `&x=${center.x.toFixed(1)}&y=${center.y.toFixed(1)}&span=${span}&px=${SIZE}&style=atlas`;
+});
+
 const gridLines = computed(() => {
   const step = R.value / 4;
   const out: { d: string; label: string }[] = [];
@@ -207,6 +224,9 @@ const kindIcon: Record<string, string> = {
       <div class="mapbox">
         <svg :viewBox="`0 0 ${SIZE} ${SIZE}`" class="map" @contextmenu="onMapContextMenu">
           <rect x="0" y="0" :width="SIZE" :height="SIZE" class="bg" />
+          <!-- P4：舆图底图（后端 pygame 渲染；浏览器只显示）——SVG 叠加层仍在它之上 -->
+          <image v-if="baseSrc" :href="baseSrc" x="0" y="0" :width="SIZE" :height="SIZE"
+                 preserveAspectRatio="none" class="basemap" />
           <!-- 里数网格（方位参照） -->
           <g class="grid-lines">
             <path v-for="(g, i) in gridLines" :key="i" :d="g.d" />
@@ -383,7 +403,9 @@ const kindIcon: Record<string, string> = {
 @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
 .mapbox { display: flex; flex-direction: column; gap: 8px; }
 .map { width: 100%; max-width: 560px; aspect-ratio: 1 / 1; background: var(--panel3); border: 1px solid var(--line); border-radius: 8px; }
-.bg { fill: transparent; }
+.bg { fill: var(--panel3); }
+/* 底图不吃鼠标事件，交互继续由上面的 SVG 图层负责（点选/悬停/右键） */
+.basemap { pointer-events: none; }
 .grid-lines path { stroke: var(--line); stroke-width: .5; opacity: .5; }
 .rivers circle { fill: var(--blue); opacity: .55; }
 .tw { fill: var(--ink-dim); stroke: var(--panel3); stroke-width: 1.5; cursor: pointer; }

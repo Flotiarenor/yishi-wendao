@@ -14,6 +14,7 @@ import os
 from typing import Optional
 
 from fastapi import FastAPI
+from fastapi import Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -82,6 +83,28 @@ def _result_payload(r, state: dict) -> dict:
     }
 
 
+def _prewarm_map(sess, span: float = 12000.0, px: int = 1200, delay: float = 0.0):
+    """（已停用；保留函数以免旧调用点炸）预热底图——**实测不划算，不要用**。
+
+    数据：舆图渲染 0.37s / PNG 编码 0.07s / 建世界 ≈6s。
+    预热要先建世界且长时间持 GIL，会把 `/api/new` 从 6~8s 拖到 11~24s（用户可见 + E2E 时序崩）。
+    首个 `/api/map/img` 请求自然会建世界并进 LRU 缓存，因此不需要预热。
+    """
+    return
+    """新局/读档后**后台**渲染一次出生地底图，让首开地图不付建世界那 ≈6 秒。
+
+    只预渲一档（舆图风 12000 里）——覆盖默认视图；其余按需渲染并走 LRU 缓存。
+    预热失败不抛（它只是优化，不该影响开局）。
+    """
+    try:
+        from present import mapimg
+        x, y = sess.g.pos()
+        mapimg.prewarm(int(sess.g.seed), float(x), float(y), span=span, px=px,
+                       style="atlas", delay=delay)
+    except Exception:
+        pass
+
+
 def create_app(config: dict = None) -> FastAPI:
     """应用工厂：全部路由 + 静态伺服。config = {"save_dir": ...}。"""
     config = config or {}
@@ -114,13 +137,48 @@ def create_app(config: dict = None) -> FastAPI:
     def api_runs():
         return {"ok": True, "runs": manager.list_runs()}
 
+    # ---------- 地图底图（P4：舆图风底图，pygame 渲染）----------
+    @app.get("/api/map/img")
+    def api_map_img(run_id: str = "", x: float = None, y: float = None,
+                    span: float = 12000.0, px: int = 1200, style: str = "atlas",
+                    labels: int = 1):
+        """世界地图底图 PNG。
+
+        - 世界种子来自**存档**（`run_id` → seed），不信任前端传入的 seed（避免看别人的世界）；
+        - `x`/`y` 缺省 = 玩家当前位置；`span` = 视图边长（里）；`px` = 输出边长（像素）；
+        - `style`: atlas（舆图风，未探索区）| real（实景风，走过的地方）。
+        - 同一参数组合有内存 LRU 缓存；渲染本身约 0.1s（舆图风逐格扫描，与像素数无关）。
+        """
+        sess = manager.load(run_id) if run_id else None
+        if sess is None:
+            return _err(404, "unknown_run")
+        seed = int(sess.g.seed)
+        if x is None or y is None:
+            x, y = sess.g.pos()
+        try:
+            from present import mapimg
+            data = mapimg.atlas_png_bytes(seed, float(x), float(y), float(span),
+                                          int(px), style=style, labels=bool(labels),
+                                          wm=getattr(sess.g, "wmap", None))
+        except Exception as e:      # 渲染失败不该把接口打成 500 裸栈
+            return _err(500, "render_failed: %s" % e)
+        return Response(content=data, media_type="image/png",
+                        headers={"Cache-Control": "no-cache"})
+
     @app.post("/api/new")
-    def api_new(body: NewIn):
+    async def api_new(body: NewIn):
+        # 注意：本路由是 **async**，故 `manager.new` / `state()` 跑在事件循环线程上——
+        # 建世界本来就慢（≈6s），这里没有再叠加因素；
+        # 关键是**预热必须晚于响应**（见 _prewarm_map 的 delay 说明）。
         sess = manager.new(seed=body.seed, name=body.name or "")
+        # ⚠️ 曾经在这里挂过"后台预热底图"，实测**净亏损**并已撤掉：
+        # 舆图渲染本身只要 0.37s，但预热线程要先建世界（≈6s）且大部分时间持 GIL，
+        # 把 `/api/new` 从 6~8s 拖到 11~24s（还搞崩了 E2E 时序）。
+        # 首个 `/api/map/img` 请求本来就会建好世界并带 LRU 缓存，无需预热。
         return {"ok": True, "run_id": sess.run_id, "state": sess.state()}
 
     @app.post("/api/load")
-    def api_load(body: RunIdIn):
+    async def api_load(body: RunIdIn):
         if not body.run_id:
             return _err(400, "bad_request")
         sess = manager.load(body.run_id)

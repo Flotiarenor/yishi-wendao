@@ -342,7 +342,7 @@ export const useSessionStore = defineStore("session", {
 
     async travel(site: string) {
       const r = await this.run(...actions.travel(site));
-      if (r?.ok) this.afterMove();
+      if (r?.ok) this.afterMove(true);
       return r;
     },
     /** 只看候选路径（纯查询：不推进时间、不移动） */
@@ -355,7 +355,7 @@ export const useSessionStore = defineStore("session", {
     /** 执行选中的候选 */
     async travelRoute(site: string, route: number) {
       const r = await this.run(...actions.travelGo(site, route));
-      if (r?.ok) this.afterMove();
+      if (r?.ok) this.afterMove(true);
       return r;
     },
     /**
@@ -364,7 +364,7 @@ export const useSessionStore = defineStore("session", {
      */
     async planTravelTo(x: number, y: number, route?: number) {
       const r = await this.run(...actions.travelToPoint(x, y, route));
-      if (r?.ok && route !== undefined) this.afterMove();
+      if (r?.ok && route !== undefined) this.afterMove(true);
       return r;
     },
     /** 无舆图手动探路 */
@@ -375,17 +375,29 @@ export const useSessionStore = defineStore("session", {
     },
     async explore(site: string) {
       const r = await this.run(...actions.explore(site));
-      if (r?.ok) this.afterMove();
+      if (r?.ok) this.afterMove(true);
       return r;
     },
-    afterMove() {
+    /**
+     * 移动/探索后的界面收尾。
+     *
+     * ⚠️ 2026-09-11 修：原来只要"身处坊市 且 当前不在坊市页"就**自动切到坊市页**，
+     * 于是**任何**会推进时间/位置的动作（含静养、参悟这类原地动作）都会把玩家从
+     * 修炼页/书库页**强行拽走**——E2E 用例 4 就是以这个形式开始红的（点「静养」后主内容区
+     * 变成地图/坊市，修炼页的下拉直接消失）。
+     * 现在按语义收紧：**只有"本次动作真的把人送进了某个地方"才自动摆出货单**；
+     * 原地动作（静养/参悟/闭关）只做"离开坊市就收起货单"，不抢页面。
+     */
+    afterMove(enteredPlace = false) {
       const ui = useUiStore();
-      // 移动/探索后主内容区停在地图——叙事文字在下方日志里持续可见
       if (!this.atMarket) {
+        // 离开坊市 → 货单失效，且若正看着坊市页则退回地图
         this.market = null;
         if (ui.screen === "market") ui.open("map");
-      } else if (ui.screen !== "market") {
-        // 抵达坊市：自动把货单放到主内容区（边看叙事边买）
+        return;
+      }
+      // 到达坊市：只在**本次真的抵达**时自动开货单（否则会打断玩家正在看的页面）
+      if (enteredPlace && ui.screen !== "market") {
         void this.openMarket();
       }
     },

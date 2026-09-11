@@ -160,8 +160,16 @@ try {
     check("2 破坏性操作有二次确认弹窗", true);
     click(confirmBtn);
   }
-  const okStatus = await waitFor(() => (document.body.textContent || "").includes("练气"), 10000);
-  check("2 状态面板出现真实数据（境界）", okStatus);
+  // ⚠️ 2026-09-11 修：原判据是"页面出现「练气」"，可**旧局状态里本来就有这三个字**，
+  // 于是测试会在 `/api/new`（冷启动要建世界 ≈6~10s）**还没返回**时就往下跑；
+  // 那次请求的收尾（`newRun` 里的 `ui.close()`）随后才到，正好把测试后面的断言打乱
+  // （表现为"点静养后被打回地图"这类离奇失败）。
+  // 改为等**开局真正落定**的标志：日志里出现「新一世 · 种子」（它在 api 返回之后才写）。
+  const okStatus = await waitFor(
+    () => (document.body.textContent || "").includes("新一世 · 种子"),
+    60000,
+  );
+  check("2 开局落定（/api/new 已返回，冷启动含建世界）", okStatus);
   check(
     "2 页面无 undefined / NaN 残留",
     !(document.body.textContent || "").includes("undefined") &&
@@ -176,7 +184,9 @@ try {
   check("3 状态栏有「修炼」切换按钮", !!culBtn);
   if (culBtn) {
     click(culBtn);
-    const switched = await waitFor(() => textOf(".main-slot").includes("修炼"), 12000);
+    // 前身是 `waitFor(...includes("修炼"), 12000)`：页面切到「修炼」页有时**要等一拍**
+    // （点完那一刻还是地图——实测过：点完立刻读仍是"🗺 地图…"），12s 在冷启动下不够稳。
+    const switched = await waitFor(() => /💪|🧘|闭关修炼/.test(textOf(".main-slot")), 30000);
     const main = textOf(".main-slot");
     check("3 修炼页在主内容区打开（非弹层）", switched && !document.querySelector(".overlay"),
       main.slice(0, 40));
@@ -202,7 +212,8 @@ try {
       click(restBtn);
       await sleep(1200);
       const sel2 = document.querySelector(".main-slot select");
-      check("4 动作后参悟选择保持不变（不再被打回第一项）", sel2 && sel2.value === cwName, `${cwName} → ${sel2?.value}`);
+      check("4 动作后参悟选择保持不变（不再被打回第一项）",
+        sel2 && sel2.value === cwName, `${cwName} → ${sel2?.value}`);
       check("4 参悟目标写入 localStorage", !!dom.window.localStorage.getItem("xiuxian.cwGongfa"));
       // 书库：熟悉度<10 也能「参悟入门」；参悟后槽位下拉出现且不留空
       const libBtn = byText(".quick button", "书库");
@@ -260,7 +271,9 @@ try {
   let explored = false;
   let battle = false;
   byText(".quick button", "地图") && click(byText(".quick button", "地图"));
-  await sleep(400);
+  // ⚠️ 2026-09-11 修：原来是固定 `sleep(400)`，顶不住服务端冷启动（世界生成 6~10s）时
+  // 地图数据还没到；改为**等真实结果**（地图与城镇点都出现）。
+  await waitFor(() => !!document.querySelector("svg.map .towns .tw"), 40000);
 
   // 6a 地图画的是**真实世界**（不再是写死的 5 个地点卡片）
   check("6a 地图为 SVG 世界地图（非地点卡片）", !!document.querySelector("svg.map") && !document.querySelector(".site"));
@@ -275,7 +288,8 @@ try {
   const dot = document.querySelector("svg.map .towns .tw:not(.here)");
   if (dot) {
     dot.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-    await sleep(400);
+    // 同理：等卡片真的渲染出来（而不是睡 400ms 赌它出来了）
+    await waitFor(() => !!document.querySelector(".side .card"), 8000);
     const planBtn = byText(".side button", "查看路线") || byText(".side button", "推演");
     if (planBtn) {
       click(planBtn);
