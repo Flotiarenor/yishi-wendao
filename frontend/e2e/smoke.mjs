@@ -123,6 +123,43 @@ async function waitFor(fn, timeoutMs = 8000, step = 60) {
   }
   return false;
 }
+/**
+ * 等"某个动作的**真实结果**出现"，而不是睡固定时长。
+ *
+ * 为什么要它（2026-09-11）：本 E2E 原来大量用 `sleep(600~1400)` 等后端返回，
+ * 而本机**冷启动要建世界 6~10s**，于是同一份代码多次连跑会得到 31/0、23/3、20/6
+ * 交替的结果（已用仓库原版 E2E 复现，属既有脆弱性）。判据换成"结果出现"后，
+ * 慢就多等、快就立刻过，不再靠猜。
+ */
+async function waitResult(fn, timeoutMs = 30000) {
+  return waitFor(fn, timeoutMs, 80);
+}
+/**
+ * **点到生效**：反复点同一个按钮，直到判据成立（或超时）。
+ *
+ * 为什么不能"点一次就等"：本机首屏要建世界 ≈6~10s，期间 `busy=true`，
+ * 按钮是 `disabled` 的——`dispatchEvent` 出去的点击**会被直接丢掉**（不是排队）。
+ * 原来的写法"点一次 + 睡一会儿 + 断言"于是在慢机器上必然误报；
+ * 这里改成"没生效就再点一次"，把"点击丢失"这件事吸收掉。
+ *
+ * 返回判据最终是否成立；`find()` 每次重新查 DOM（Vue 可能重建了节点）。
+ */
+async function clickUntil(find, predicate, timeoutMs = 30000, step = 250) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    if (predicate()) return true;
+    const el = find();
+    if (el && !el.disabled) {
+      try {
+        click(el);
+      } catch {
+        /* 元素可能已被替换，下一轮再取 */
+      }
+    }
+    await sleep(step);
+  }
+  return predicate();
+}
 
 let exitCode = 1;
 try {
@@ -183,10 +220,12 @@ try {
   const culBtn = byText(".quick button", "修炼");
   check("3 状态栏有「修炼」切换按钮", !!culBtn);
   if (culBtn) {
-    click(culBtn);
-    // 前身是 `waitFor(...includes("修炼"), 12000)`：页面切到「修炼」页有时**要等一拍**
-    // （点完那一刻还是地图——实测过：点完立刻读仍是"🗺 地图…"），12s 在冷启动下不够稳。
-    const switched = await waitFor(() => /💪|🧘|闭关修炼/.test(textOf(".main-slot")), 30000);
+    // 冷启动期间按钮 `disabled`，点一次可能被丢掉 → 用"点到生效"重试
+    const switched = await clickUntil(
+      () => byText(".quick button", "修炼"),
+      () => /🧘|闭关修炼/.test(textOf(".main-slot")),
+      40000,
+    );
     const main = textOf(".main-slot");
     check("3 修炼页在主内容区打开（非弹层）", switched && !document.querySelector(".overlay"),
       main.slice(0, 40));
@@ -209,8 +248,13 @@ try {
     if (ageInput) ageInput.value = "1";
     const restBtn = byText(".main-slot button", "静养");
     if (restBtn) {
-      click(restBtn);
-      await sleep(1200);
+      const logsBefore = document.querySelectorAll(".log-line").length;
+      // 同样可能被丢：点到日志真的多出一行
+      await clickUntil(
+        () => byText(".main-slot button", "静养"),
+        () => document.querySelectorAll(".log-line").length > logsBefore,
+        30000,
+      );
       const sel2 = document.querySelector(".main-slot select");
       check("4 动作后参悟选择保持不变（不再被打回第一项）",
         sel2 && sel2.value === cwName, `${cwName} → ${sel2?.value}`);
@@ -219,16 +263,16 @@ try {
       const libBtn = byText(".quick button", "书库");
       if (libBtn) {
         click(libBtn);
-        await sleep(600);
+        await waitResult(() => !!document.querySelector(".main-slot .item"), 20000);
         const item = document.querySelector(".main-slot .item");
         if (item) {
           click(item);
-          await sleep(700);
+          await waitResult(() => !!document.querySelector(".main-slot .detail button"), 20000);
           const entryBtn = byText(".main-slot .detail button", "参悟入门");
           check("4 书库：熟悉度不足时也能点「参悟入门」", !!entryBtn && !entryBtn.disabled);
           if (entryBtn && !entryBtn.disabled) {
             click(entryBtn);
-            await sleep(1400);
+            await waitResult(() => !!document.querySelector(".main-slot .detail select"), 25000);
             const slotSel = document.querySelector(".main-slot .detail select");
             check("4 参悟入门后槽位下拉出现且不留空", !!slotSel && !!slotSel.value, `value=${slotSel?.value}`);
           }
@@ -290,12 +334,25 @@ try {
     dot.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
     // 同理：等卡片真的渲染出来（而不是睡 400ms 赌它出来了）
     await waitFor(() => !!document.querySelector(".side .card"), 8000);
-    const planBtn = byText(".side button", "查看路线") || byText(".side button", "推演");
+    // 等"查看路线"按钮出现（卡片渲染与 `s.canAct` 都可能晚一拍），再点。
+    let planBtn = byText(".side button", "查看路线") || byText(".side button", "推演");
+    if (!planBtn) {
+      await waitFor(() => !!(byText(".side button", "查看路线") || byText(".side button", "推演")), 15000);
+      planBtn = byText(".side button", "查看路线") || byText(".side button", "推演");
+    }
     if (planBtn) {
-      click(planBtn);
-      routeShown = await waitFor(() => !!document.querySelector(".routes .route"), 20000);
+      routeShown = await clickUntil(
+        () => byText(".side button", "查看路线") || byText(".side button", "推演"),
+        () => !!document.querySelector(".routes .route"),
+        45000,
+      );
       const r0 = document.querySelector(".routes .route");
       routeDays = r0 ? (r0.textContent || "").trim() : "";
+      if (!routeShown) {
+        // 失败时把卡片/提示原文带出来，便于定位（而不是只报一句 false）
+        const card = document.querySelector(".side");
+        routeDays = "（未出候选）侧栏原文：" + (card ? (card.textContent || "").trim() : "（空）");
+      }
     } else {
       const card = document.querySelector(".side .card");
       routeDays = "选中项：" + (card ? (card.textContent || "").trim() : "（无卡片）");
@@ -365,7 +422,11 @@ try {
       if (exec) {
         const tBefore = textOf(".tl-foot");
         click(exec);
-        await sleep(1400);
+        // 等"时间轴推进"或"战斗结束"真的发生，而不是睡固定时长
+        await waitResult(
+          () => textOf(".tl-foot") !== tBefore || !byText("h2", "战斗"),
+          25000,
+        );
         const tAfter = textOf(".tl-foot");
         check("6 执行本轮 → 时间轴推进", !byText("h2", "战斗") || tAfter !== tBefore, `${tBefore.slice(0, 24)} → ${tAfter.slice(0, 24)}`);
       }

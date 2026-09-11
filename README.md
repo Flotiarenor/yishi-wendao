@@ -22,6 +22,7 @@ powershell -ExecutionPolicy Bypass -File tools\make_shortcut.ps1   # 生成带 A
 .venv\Scripts\python.exe -X utf8 main.py smoke --lives 20  # 自动 bot 回归（记录分布/战斗统计）
 .venv\Scripts\python.exe -X utf8 main.py test              # 一键跑全部测试（13 个单测文件 + 冒烟 20 局）
 .venv\Scripts\python.exe -X utf8 main.py check             # content/ 数据校验（--strict 警告也失败）
+.venv\Scripts\python.exe -X utf8 tools\e2e_web.py          # 真浏览器冒烟（Selenium + Edge；需 pip install selenium）
 .venv\Scripts\python.exe -X utf8 -m tools.dummy            # 木桩试招（7 流派对照）
 ```
 
