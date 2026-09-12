@@ -61,6 +61,16 @@ async function waitHealth(timeoutMs = 20000) {
   return false;
 }
 
+/** 服务端端口是否还开着（用于"等它真的关掉"，替代固定 sleep）。 */
+async function portOpen() {
+  try {
+    const r = await fetch(`${BASE}/health`);
+    return !!r;
+  } catch {
+    return false;   // 连接被拒 = 已释放
+  }
+}
+
 function findBundle() {
   const assets = path.join(DIST, "assets");
   if (!existsSync(assets)) return null;
@@ -191,11 +201,14 @@ try {
   const newBtn = byText("button", "新建一世");
   check("2 找到「新建一世」按钮", !!newBtn);
   click(newBtn);
-  await sleep(300);
-  const confirmBtn = byText(".sheet button", "确定");
-  if (confirmBtn) {
+  // ⚠️ 二次确认弹窗是**渲染之后**才有的（Vue 异步），原来固定 `sleep(300)` 赌它出现——
+  // 机器忙时（后台可能正跑冒烟/建世界）会赌输，于是"确定"没点到、`/api/new` 从没发出，
+  // 后面每一条断言都连锁失败（表现为"点静养后被打回地图"这类离奇失败）。
+  // 改为**等它真的出现**（判据本身仍是"有二次确认"，语义不变）。
+  const hasConfirm = await waitResult(() => !!byText(".sheet button", "确定"), 15000);
+  if (hasConfirm) {
     check("2 破坏性操作有二次确认弹窗", true);
-    click(confirmBtn);
+    click(byText(".sheet button", "确定"));
   }
   // ⚠️ 2026-09-11 修：原判据是"页面出现「练气」"，可**旧局状态里本来就有这三个字**，
   // 于是测试会在 `/api/new`（冷启动要建世界 ≈6~10s）**还没返回**时就往下跑；
@@ -303,6 +316,7 @@ try {
     const h0 = parseFloat(logSlot.style.height || "0");
     pointer("pointerdown", splitter, 460);
     pointer("pointermove", dom.window, 400); // 向上拖 → 日志变高
+    // 这里等的是**动画/重排**（不是等响应），150ms 属允许范围；拖拽逻辑本身是同步的。
     await sleep(120);
     pointer("pointerup", dom.window, 400);
     const h1 = parseFloat(logSlot.style.height || "0");
@@ -444,6 +458,9 @@ try {
   exitCode = 1;
 } finally {
   server.kill();
-  await sleep(300);
+  // 等**端口真的释放**，而不是固定睡 300ms 赌它好了。
+  // 理由：① 固定时长不保证释放，下一次连跑可能撞端口；② 这一步每个用例都要等，
+  // 换成"释放即走"既更稳也更快。
+  await waitFor(() => !portOpen(), 5000, 50);
   process.exit(exitCode);
 }
