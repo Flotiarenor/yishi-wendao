@@ -22,8 +22,9 @@ localStorage 等）。但 jsdom 有两个**原理性盲区**，本项目已经�
 
 ## 底图基线
 
-`logs/map_baseline.json` 存底图的 sha256 与像素统计。**地图渲染一改就会变红**——
-这正是 P4 想要的"改地图必须可验证"（同类思路：`terrain_checksum`、smoke 指纹）。
+`tests/baselines/map_baseline.json` 存底图的 sha256 与像素统计（**入库，跟着代码走**）。
+**地图渲染一改就会变红**——这正是 P4 想要的"改地图必须可验证"
+（同类思路：`terrain_checksum`、smoke 指纹）。
 首次运行或改完地图后，用 `--update-baseline` 重记基线。
 
 用法：
@@ -237,7 +238,11 @@ def main(argv=None):
                 import urllib.request
                 raw = urllib.request.urlopen(f"http://127.0.0.1:{port}{href}", timeout=60).read()
                 digest = hashlib.sha256(raw).hexdigest()[:16]
-                base_path = os.path.join(ROOT, "logs", "map_baseline.json")
+                # 基线放在 `tests/baselines/`（**入库**）而不是 `logs/`（整目录 gitignore）：
+                # 基线不跟着代码走，换台机器/新克隆一跑就红，而"红"的原因却不是代码变了。
+                # 与 `terrain_checksum` 同理——判据必须可复现。
+                base_path = os.path.join(ROOT, "tests", "baselines", "map_baseline.json")
+                os.makedirs(os.path.dirname(base_path), exist_ok=True)
                 cur = {"seed": a.seed, "sha256_16": digest, "natural": stats["natural"],
                        "colors": stats["colors"], "paper": round(stats["paper"], 4),
                        "ink": round(stats["ink"], 4), "water": round(stats["water"], 4),

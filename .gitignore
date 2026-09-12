@@ -5,6 +5,8 @@ __pycache__/
 saves/
 logs/
 *.log
+.dsh
+
 
 # ---- 前端（P3.7）----
 frontend/node_modules/
@@ -14,6 +16,7 @@ frontend/dist/
 # ---- 编辑器/系统 ----
 .vscode/
 .idea/
+.VSCodeCounter
 Thumbs.db
 desktop.ini
 python虚拟环境管理脚本.ps1
