@@ -26,7 +26,7 @@ class IntelItem:
     price: int
     kind: str                 # "map" = 舆图档位；"point_intel" = 当地点情报
     desc: str = ""
-    map_level: str = ""       # kind="map"：买到后成为哪一档（settings.MAP_LEVELS）
+    map_level: str = ""       # kind="map"：买到后成为哪一档（engine/settings.py MAP_LEVEL_ORDER）
     radius_li: float = 0.0    # kind="point_intel"：揭示半径（里；0 = 用 settings 默认）
 
 

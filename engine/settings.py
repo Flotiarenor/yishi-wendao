@@ -214,7 +214,10 @@ FLY_MIN_REALM = 14                             # 金丹·初期起可飞
 SWIM_MIN_REALM = 10                            # 筑基·初期起可渡水
 VISION_RADIUS_LI = (60.0, 150.0, 400.0, 1000.0, 2500.0)   # 神识半径：练气/筑基/金丹/元婴/化神（定案原值）
 # 注：**不再要求** ≥ WORLD_CELL_LI——地形已连续采样，迷雾遮的是"内容点"而非"格"（2026-09-10 修正）
-MAP_LEVELS = ("none", "coarse", "detail")      # 无舆图 / 粗舆图 / 详图（T4 用）
+# ⚠️ 舆图档位常量**只有一处**：`MAP_LEVEL_ORDER` / `MAP_LEVEL_LABELS`（见上方"情报买卖"段）。
+# 这里曾另有一个 `MAP_LEVELS = ("none", "coarse", "detail")`——**拼写错了**（真档位名是
+# `"detailed"`），且全库零引用（是 T2 时代遗留）。两个近名常量并存正是"判据分叉"的种子：
+# 谁引用到它，就会拿到一个 `map_view` 根本不认的档位名。**已于 2026-09-11 删除，勿再新增。**
 WORLD_CACHE_SIZE = 4                           # WorldMap 实例缓存条数（同种子复用）
 
 
