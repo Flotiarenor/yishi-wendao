@@ -126,8 +126,13 @@ export const api = {
       run_id: runId,
     }),
 
-  state: (runId: string) =>
-    request<{ state: StateData }>("/api/state?run_id=" + encodeURIComponent(runId), "GET"),
+  /** `span`（可选）= 当前视图边长（里）：缩放时传，让服务端按视图下发城镇 */
+  state: (runId: string, span?: number) =>
+    request<{ state: StateData }>(
+      "/api/state?run_id=" + encodeURIComponent(runId) +
+      (span ? "&span=" + encodeURIComponent(String(Math.round(span))) : ""),
+      "GET",
+    ),
 
   undo: (runId: string) =>
     request<{ state?: StateData }>("/api/undo", "POST", { run_id: runId }),

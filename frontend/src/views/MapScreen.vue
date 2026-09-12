@@ -14,6 +14,7 @@ import { computed, ref } from "vue";
 
 import EmbeddedPanel from "@/components/EmbeddedPanel.vue";
 import { useSessionStore } from "@/stores/session";
+import { MAP_SPANS, DEFAULT_MAP_SPAN } from "@/stores/session";
 import { useUiStore } from "@/stores/ui";
 import type { MapPoint, MapTown, TravelRoute } from "@/types/contract";
 
@@ -107,11 +108,12 @@ const SIZE = 560;
  *
  * ⚠️ 这里曾有 `PAD = 26` 的内缩，是坐标错位的**第二个**成因：
  * 底图（后端渲染）把 `span` 里数铺满 `SIZE` 像素，而叠加层把同样的 `span` 挤进
- * `SIZE - 2*PAD`，于是**同一个世界坐标在两层上落在不同像素**——离中心越远差越多
+ * `SIZE - 2*PAD`，于是**同一个世界坐标在两层落在不同像素**——离中心越远差越多
  * （中心重合，所以只核对中心时看不出来）。两个层要叠在一起，就必须**同一套半幅**。
  * 2026-09-11 与 `tools/atlas.py` 的 y 翻转一并修正。 */
 const HALF = SIZE / 2;
-const R = computed(() => mv.value?.radius_li || 4000);
+/** 视野半径（里）= 视图边长的一半。**由 store 的缩放档位驱动**（T6 缩放）。 */
+const R = computed(() => s.mapSpan / 2);
 const px = (x: number, y: number) => {
   const sx = ((x - (mv.value?.self.x ?? 0)) / R.value) * HALF;
   // 世界 y 向上（北），SVG y 向下 → 取负
@@ -161,6 +163,28 @@ const selTown = computed<MapTown | null>(() =>
 const selPoint = computed<MapPoint | null>(() =>
   sel.value?.kind === "point" ? (mv.value?.points.find((p) => p.id === sel.value!.id) ?? null) : null,
 );
+
+// ---------- 缩放（T6）----------
+/**
+ * 档位制缩放：`MAP_SPANS` 由近到远，`zoom(+1)` 看更远、`zoom(-1)` 看更近。
+ *
+ * 为什么档位而不是连续：底图由服务端按 `span` 渲染并做 LRU 缓存，
+ * 连续缩放会让缓存几乎不命中（每帧一次 16 万格扫描）。见 `MAP_SPANS` 的注释。
+ */
+const spanIdx = computed(() => {
+  const i = (MAP_SPANS as readonly number[]).indexOf(s.mapSpan);
+  return i < 0 ? (MAP_SPANS as readonly number[]).indexOf(DEFAULT_MAP_SPAN) : i;
+});
+const canZoomIn = computed(() => spanIdx.value > 0);
+const canZoomOut = computed(() => spanIdx.value < MAP_SPANS.length - 1);
+async function zoom(dir: number) {
+  const i = spanIdx.value + dir;
+  if (i < 0 || i >= MAP_SPANS.length) return;
+  await s.setMapSpan(MAP_SPANS[i]);
+}
+async function resetZoom() {
+  await s.setMapSpan(DEFAULT_MAP_SPAN);
+}
 
 function pickTown(t: MapTown) {
   sel.value = { kind: "town", id: t.id };
@@ -225,9 +249,18 @@ const kindIcon: Record<string, string> = {
         <template v-if="!hasMap">无舆图 ｜ 只能按方向摸索（手动探路）</template>
         <template v-else>
           舆图：{{ mapLevel === "detailed" ? "详图" : "粗舆图" }} ｜
-          周边 {{ Math.round(R).toLocaleString() }} 里 ｜
+          <span class="map-nearby">周边 {{ Math.round(R).toLocaleString() }} 里</span> ｜
           神识视野 {{ Math.round(mv?.vision_li || 0) }} 里
         </template>
+      </span>
+      <!-- T6 缩放：档位制（后端底图按 span 缓存，连续缩放会让缓存几乎不命中） -->
+      <span class="zoom">
+        <button class="btn mini" :disabled="!canZoomIn" title="放大（看得更近）"
+                @click="zoom(-1)">＋</button>
+        <button class="btn mini" :disabled="!canZoomOut" title="缩小（看得更远）"
+                @click="zoom(1)">－</button>
+        <button class="btn mini" v-if="s.mapSpan !== DEFAULT_MAP_SPAN"
+                title="回到默认视野" @click="resetZoom">复位</button>
       </span>
     </template>
 
@@ -440,6 +473,8 @@ const kindIcon: Record<string, string> = {
 .ctx-ring { fill: none; stroke: var(--red); stroke-width: 2; stroke-dasharray: 3 3; }
 .ctx-line { stroke: var(--red); stroke-width: 1; opacity: .45; stroke-dasharray: 4 4; }
 .ctx-label { fill: var(--red); font-size: 11px; text-anchor: middle; }
+.zoom { display: inline-flex; gap: 4px; align-items: center; }
+.zoom .btn { min-width: 26px; padding: 1px 6px; }
 .ctxpanel { display: flex; flex-direction: column; gap: 6px; background: var(--panel3);
   border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 .ctxhd { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }

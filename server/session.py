@@ -95,10 +95,14 @@ class GameSession:
             self._persist()
             return True, None
 
-    def state(self) -> dict:
-        """只读状态快照（g.state_data()，不推进 turn/不耗随机/不落盘）。"""
+    def state(self, map_span_li: float = None) -> dict:
+        """只读状态快照（g.state_data()，不推进 turn/不耗随机/不落盘）。
+
+        `map_span_li` = 前端当前视图边长（里）：缩小时要下发更大半径的城镇，
+        否则"底图上有镇、却不可点"（T6 缩放）。
+        """
         with self.lock:
-            return self.g.state_data()
+            return self.g.state_data(map_span_li=map_span_li)
 
     def meta(self) -> dict:
         """run 元信息（/api/runs 列表项）。"""

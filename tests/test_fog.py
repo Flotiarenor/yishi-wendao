@@ -508,5 +508,35 @@ _d_old.pop("explored")                     # 模拟真正的老档（没有这�
 check("J14 缺 explored 键的老档可载入且为空集",
       set(WM.WorldState.from_dict(_d_old).explored) == set(), "")
 
+# ============ K. 缩放：下发半径随视图走（T6）============
+# 判据：`map_view(span_li=…)` 的半径 = span/2；缩小时**城镇数量必须变多**——
+# 否则底图（按 span 画）上有城镇、却没有可点击的点，图上与交互对不上。
+print("\n== K 缩放：地图下发半径随视图边长走 ==")
+g = new_game()
+_n_default = g.map_view()["counts"]["towns"]
+check("K1 不传 span 时用默认半径（4000 里，与旧行为一致）",
+      g.map_view()["radius_li"] == S.MAP_VIEW_RADIUS_LI,
+      str(g.map_view()["radius_li"]))
+check("K2 span=8000 → 半径 4000（与默认等价，不改变原有视野）",
+      g.map_view(span_li=8000)["radius_li"] == 4000.0
+      and g.map_view(span_li=8000)["counts"]["towns"] == _n_default, "")
+_mid = g.map_view(span_li=20000)
+check("K3 缩到整世界（span=20000）→ 半径 span/2=10000，城镇数显著变多",
+      _mid["radius_li"] == 10000.0 and _mid["counts"]["towns"] > _n_default,
+      f"半径 {_mid['radius_li']} 镇 {_mid['counts']['towns']} vs 默认 {_n_default}")
+_near = g.map_view(span_li=1000)
+check("K4 放大到 1000 里 → 半径 500，城镇数变少",
+      _near["radius_li"] == 500.0 and _near["counts"]["towns"] < _n_default,
+      f"半径 {_near['radius_li']} 镇 {_near['counts']['towns']}")
+check("K5 超世界的 span 被夹住（不会算出离谱半径）",
+      g.map_view(span_li=99999)["radius_li"] == float(WM._WORLD_LI),
+      str(g.map_view(span_li=99999)["radius_li"]))
+check("K6 span 进缓存键：不同 span 不互相串（同一实例连查两次一致）",
+      g.map_view(span_li=20000)["counts"]["towns"] == _mid["counts"]["towns"]
+      and g.map_view(span_li=4000)["counts"]["towns"] != _mid["counts"]["towns"], "")
+check("K7 state_data 透传 span（前端 /api/state?span= 走的就是这条）",
+      g.state_data(map_span_li=20000)["map"]["counts"]["towns"] == _mid["counts"]["towns"]
+      and g.state_data()["map"]["counts"]["towns"] == _n_default, "")
+
 print("\n== 结果：%d 过 / %d 败 ==" % (_PASS, _FAIL))
 sys.exit(1 if _FAIL else 0)

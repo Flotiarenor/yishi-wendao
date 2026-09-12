@@ -212,13 +212,18 @@ def create_app(config: dict = None) -> FastAPI:
         return {"ok": True, "reason": "ok", "state": sess.state()}
 
     @app.get("/api/state")
-    def api_state(run_id: str = ""):
+    def api_state(run_id: str = "", span: float = None):
+        """状态快照。`span`（可选）= 前端当前视图边长（里）。
+
+        缩放时要传它：`map_view` 的下发半径随视图走，否则缩小后
+        "底图上有城镇、却没有可点击的点"（T6 缩放，2026-09-11）。
+        """
         if not run_id:
             return _err(400, "bad_request")
         sess = manager.load(run_id)
         if sess is None:
             return _err(404, "unknown_run")
-        return {"ok": True, "state": sess.state()}
+        return {"ok": True, "state": sess.state(map_span_li=span)}
 
     # ---------- 静态前端挂载在 API 之后 ----------
     # 顺序要求：/api 前缀的 404 不被 SPA fallback 吞成 index.html。

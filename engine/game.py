@@ -1377,8 +1377,16 @@ class Game:
         )
 
     # ===== 地图信息出口（T4 迷雾的前置；P4-T3 后补：UI 要显示真实地图）=====
-    def map_view(self, radius_li: float = None) -> dict:
+    def map_view(self, radius_li: float = None, span_li: float = None) -> dict:
         """当前位置周边的地图信息（**按舆图档下发**，定案 §5）。
+
+        `span_li` = 前端**当前视图边长**（里）。给了就按它下发（半径 = span/2），
+        否则用 `MAP_VIEW_RADIUS_LI`（默认一个域）。
+
+        为什么必须有这个参数（T6 缩放的前提）：默认半径是 4000 里 = 8000 里视野。
+        玩家一旦**缩小**看得更远，底图（后端按 span 画）会出现图上有城镇、
+        却没有可点击的点（`map_view` 还按 4000 里过滤）——图上与交互对不上。
+        半径随缩放走，两者始终一致。上限夹到世界边长（再多也没有了）。
 
         | 舆图档 | 下发内容 |
         |---|---|
@@ -1398,7 +1406,12 @@ class Game:
         """
         lvl = str(self.state.world.map_level or "none")
         x, y = self.pos()
-        rad = float(radius_li if radius_li is not None else S.MAP_VIEW_RADIUS_LI)
+        if radius_li is not None:
+            rad = float(radius_li)
+        elif span_li:
+            rad = min(float(span_li) / 2.0, float(WM._WORLD_LI))
+        else:
+            rad = float(S.MAP_VIEW_RADIUS_LI)
         realm = int(self.state.player.realm_idx)
         disc = self.state.world.discovered
         # 缓存键用 `_disc_ver`（单调递增），**不用 `len(disc)`**：`discovered` 是集合，
@@ -2532,13 +2545,16 @@ class Game:
 
     # ---------- 显示 ----------
     # ---------- 状态：结构化数据 + 叙事渲染（P3.5 分离） ----------
-    def state_data(self) -> dict:
+    def state_data(self, map_span_li: float = None) -> dict:
         """只读状态快照（P3.6 Web 壳用）：不推进 turn、不消耗随机流、不落盘。
 
         与 step("status") 的区别：status 会 turn += 1；本方法纯读，
         供会话层在每次 Web 响应中携带最新状态而不扰动确定性游标。
+
+        `map_span_li` = 前端当前**视图边长**（里），透传给 `map_view()`——
+        缩小时要下发更大半径的城镇，否则"图上有镇、却不可点"（T6 缩放，2026-09-11）。
         """
-        return self._status_data()
+        return self._status_data(map_span_li=map_span_li)
 
     def _owned_entry(self, gid: int) -> dict:
         """一本已拥有功法的结构化状态（status 领悟池 / gd 书库共用）。"""
@@ -2556,7 +2572,7 @@ class Game:
             "slot": _slot_of(p, gid),
         }
 
-    def _status_data(self) -> dict:
+    def _status_data(self, map_span_li: float = None) -> dict:
         """玩家/世界状态的结构化快照（前端面板的唯一数据源）。"""
         p = self.state.player
         main = p.main_gongfa
@@ -2575,7 +2591,7 @@ class Game:
             "location": {"id": p.location, "name": self.place_name(),
                          "x": self.pos()[0], "y": self.pos()[1],
                          "map_level": self.state.world.map_level},
-            "map": self.map_view(),
+            "map": self.map_view(span_li=map_span_li),
             "inventory": [{"id": pid, "name": P.name_of(pid), "qty": qty}
                           for pid, qty in p.inventory.items()],
             "pool": {

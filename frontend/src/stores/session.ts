@@ -24,6 +24,24 @@ const LOG_MAX = 800;
 const LS_LAST_RUN = "xiuxian.lastRun";
 const LS_LOG_PREFIX = "xiuxian.log.";
 const LS_CW_GONGFA = "xiuxian.cwGongfa";
+const LS_MAP_SPAN = "xiuxian.mapSpan";
+
+/**
+ * 地图缩放的**档位**（视图边长，里）。由近到远。
+ *
+ * 为什么是档位而不是连续缩放：底图是服务端按 `span` 渲染并缓存的
+ * （`/api/map/img` 的 LRU 键含 span），连续缩放会让缓存几乎不命中，
+ * 每帧都触发一次 16 万格扫描。档位制 = 缓存命中率高、实现简单、手感也够。
+ *
+ * 1000 / 2000 / 4000 里 ≈ 1 / 2 / 4 格半幅；20000 里 = 整世界。
+ */
+export const MAP_SPANS = [1000, 2000, 4000, 8000, 20000] as const;
+export const DEFAULT_MAP_SPAN = 8000;      // = 原 `MAP_VIEW_RADIUS_LI(4000) × 2`，保持默认视野不变
+
+function loadMapSpan(): number {
+  const raw = Number(lsGet(LS_MAP_SPAN));
+  return (MAP_SPANS as readonly number[]).includes(raw) ? raw : DEFAULT_MAP_SPAN;
+}
 
 function lsGet(k: string): string | null {
   try {
@@ -61,6 +79,14 @@ export const useSessionStore = defineStore("session", {
         return "";
       }
     })(),
+    /**
+     * 地图视图边长（里）= 2 × 视野半径。**T6 缩放**用。
+     *
+     * 为什么要放在 store 而不是 MapScreen 的局部 ref：服务端要让下发半径跟着视图走
+     * （`/api/state?span=…`），否则缩小后"底图上有城镇、却没有可点击的点"。
+     * 缩放时由 `setMapSpan()` 重新取一次状态。
+     */
+    mapSpan: loadMapSpan(),
   }),
 
   getters: {
@@ -202,6 +228,29 @@ export const useSessionStore = defineStore("session", {
         return true;
       } finally {
         this.busy = false;
+      }
+    },
+
+    /**
+     * 设置地图视图边长（T6 缩放）。
+     *
+     * 为什么要重新取一次状态：`map_view` 的下发半径随视图走
+     * （`/api/state?span=…`），不重取的话缩小后会出现"底图上有城镇、
+     * 却不可点击"——图上与交互对不上。
+     *
+     * 只改视图不动游戏状态：**不推进时间、不消耗随机流**（`/api/state` 是纯读）。
+     */
+    async setMapSpan(span: number) {
+      const v = Math.max(400, Math.min(20000, Math.round(span)));
+      if (v === this.mapSpan) return;
+      this.mapSpan = v;
+      lsSet(LS_MAP_SPAN, String(v));
+      if (!this.runId) return;
+      try {
+        const r = await api.state(this.runId, v);
+        if (r?.ok && r.state) this.state = r.state;
+      } catch {
+        /* 取不到就先用旧数据，下次动作会带回新状态 */
       }
     },
 

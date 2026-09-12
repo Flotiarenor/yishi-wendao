@@ -211,12 +211,52 @@ def _ward(surf, x, y, s, color=_INK):
     pygame.draw.line(surf, color, (x, y - s * 0.42), (x, y + s * 0.42), 1)
 
 
+def _detail_tier(span: float) -> dict:
+    """按**视野跨度**给舆图分细节档（T6 缩放：远看大势，近看细处）。
+
+    为什么按 span 而不是按像素：舆图是**逐格扫描**的，一格在屏上占
+    `px * 50 / span` 像素——span 越大、一格越小，母题就越密。
+    整世界尺度（一格 ≈ 1.4 px）下把 16 万格的母题全撒出来只会糊成一片，
+    故远景**只留大势**（海 / 山 / 主城 / 官道），细节留给近景。
+
+    | 档 | span（里） | 一格≈ | 画什么 |
+    |---|---|---|---|
+    | `far` | ≥ 16000 | ≤ 1.8 px | 海、山、主城、官道、主城名 |
+    | `near` | 其余 | ≥ 1.8 px | 全部：海/山/沙/草/林/沼/禁制 + 小径 + 普通镇 + 河流 |
+
+    注意：河流在 `far` 档**保留**（"山川大势"里河是大势的一部分），
+    小径与普通镇才降级——定案 §5 的"舆图=山川大势、域界、城镇方位"对的就是这一档。
+    """
+    if span >= 16000.0:
+        return {
+            "name": "far",
+            "motif_kinds": ("mount",),          # 只画山；沙/草/林/沼在整世界尺度会糊成噪声
+            "show_trails": False,               # 小径（trail）不画
+            "min_town": "main",                 # 只画主城
+            "rivers": True,
+            "max_labels": 26,                   # 主城名也要少，免得叠字
+        }
+    return {
+        "name": "near",
+        "motif_kinds": ("mount", "sand", "grass", "forest", "swamp", "ward"),
+        "show_trails": True,
+        "min_town": "all",
+        "rivers": True,
+        "max_labels": 40,
+    }
+
+
 def render_atlas(wm, cx, cy, span, px, seed=20260910, labels=True,
-                 max_labels=40, show_rivers=True, show_roads=True, explored=None):
+                 max_labels=40, show_rivers=True, show_roads=True, explored=None,
+                 tier: str = None, out_stats: dict = None):
     """渲染一张舆图：纸底 + 单色墨线 + 粗粒度地貌 + 拟合路网 + 城镇/地名。
 
     逐格扫描（读 `_base` 数组，400×400 = 16 万格，约 30 ms），
     故与输出像素数无关——**天生可实时**。
+
+    `tier`：细节档（`"far"` / `"near"` / None=按 `span` 自动，见 `_detail_tier`）。
+    `out_stats`：给一个 dict 就写入本帧的"画了什么"（档位名 / 城镇数 / 路段数 /
+    母题种类），供单测与排查用——**不要把渲染结果反推成判据**（那是脆的）。
 
     ## `explored`：探索边界（定案 §5「两层迷雾」的可视化）
 
@@ -231,6 +271,7 @@ def render_atlas(wm, cx, cy, span, px, seed=20260910, labels=True,
 
     ⚠️ **依据必须是 `explored`（真的站过），不是 `discovered`**：
     后者会被"买情报"灌入（听说），拿它画实景会让买一份情报就点亮一片。
+
 
     ⚠️ **必须画在纸纹之后、水系/母题之前**：舆图的淡蓝水色与墨是**半透明**的，
     实景若压在它们**下面**会被透出来，"撕开纸面"的效果就不成立。
@@ -265,6 +306,16 @@ def render_atlas(wm, cx, cy, span, px, seed=20260910, labels=True,
         return ((x - x0) * k, (y0 + span - y) * k)
 
     surf = pygame.Surface((px, px))
+    # 0) 细节档（T6 缩放：远看大势、近看细处）
+    # `tier` 给名字就覆盖自动判定；用"该档代表的 span"取配置，避免两处各写一份参数。
+    if tier == "far":
+        TI = _detail_tier(20000.0)
+    elif tier == "near":
+        TI = _detail_tier(4000.0)
+    else:
+        TI = _detail_tier(float(span))
+    max_labels = min(int(max_labels), int(TI["max_labels"]))
+
     # 1) 纸底 + 极轻的纸纹（确定性，避免"塑料感"）
     surf.fill(_PAPER)
     for j in range(0, px, 3):
@@ -327,34 +378,36 @@ def render_atlas(wm, cx, cy, span, px, seed=20260910, labels=True,
 
     # 3) 地貌母题：按格稀疏撒点（不是满涂）；山最密，其余更疏
     # 母题密度：山最密；沙漠/沼泽/林地中等；**草原要疏**（它占 10.7% 的格，密了会铺满整张图）
+    # `far` 档只留山（见 `_detail_tier`）：整世界尺度下沙/草/林/沼会糊成一片噪声。
     motif_rate = {"mount": 0.16, "sand": 0.10, "forest": 0.10, "swamp": 0.10, "grass": 0.06}
+    kinds = TI["motif_kinds"]
     for (i, j), tid in grid.items():
         if tid in G["sea"]:
             continue
         gx, gy = w2p((i + 0.5) * cell, (j + 0.5) * cell)
         s = max(5.0, cell * k)
         if tid in G["mount"]:
-            if _hash01(i, j, 3) < motif_rate["mount"]:
+            if "mount" in kinds and _hash01(i, j, 3) < motif_rate["mount"]:
                 _peak(surf, gx + (s * 0.2 * (_hash01(i, j, 4) - 0.5)), gy, s)
         elif tid in G["sand"]:
-            if _hash01(i, j, 5) < motif_rate["sand"]:
+            if "sand" in kinds and _hash01(i, j, 5) < motif_rate["sand"]:
                 _dune(surf, gx, gy, s * 1.3)
         elif tid in G["grass"]:
-            if _hash01(i, j, 12) < motif_rate["grass"]:
+            if "grass" in kinds and _hash01(i, j, 12) < motif_rate["grass"]:
                 _tuft(surf, gx, gy, s * 1.2)
         elif tid in G["forest"]:
-            if _hash01(i, j, 6) < motif_rate["forest"]:
+            if "forest" in kinds and _hash01(i, j, 6) < motif_rate["forest"]:
                 _tree(surf, gx, gy, s * 1.1)
         elif tid in G["swamp"]:
-            if _hash01(i, j, 8) < motif_rate["swamp"]:
+            if "swamp" in kinds and _hash01(i, j, 8) < motif_rate["swamp"]:
                 _marsh(surf, gx, gy, s * 1.1)
         elif tid in G["ward"]:
             # 禁制：圈 + 十字（用户选定），但**只在近景画**——整世界尺度下 50% 密度会糊成一片符号
-            if k >= 0.05 and _hash01(i, j, 9) < 0.5:
+            if "ward" in kinds and k >= 0.05 and _hash01(i, j, 9) < 0.5:
                 _ward(surf, gx, gy, s * 1.4)
 
-    # 4) 河：细淡墨线（真实折线，轻傅里叶平滑）
-    if show_rivers:
+    # 4) 河：细淡墨线（真实折线，轻傅里叶平滑）。`far` 档也画——"山川大势"里河是大势
+    if show_rivers and TI["rivers"]:
         for rv in wm.rivers():
             pts = [w2p(px_, py_) for px_, py_ in smooth_polyline(rv.points, seg_samples=4)]
             inside = [(x, y) for x, y in pts if -50 <= x <= px + 50 and -50 <= y <= px + 50]
@@ -362,19 +415,25 @@ def render_atlas(wm, cx, cy, span, px, seed=20260910, labels=True,
                 brush_stroke(surf, inside, _INK_LIGHT, width=2, taper=True)
 
     # 5) 路网：**拟合真实路径**（不是你要求的"生成"）——傅里叶平滑 + 毛笔感
+    # `far` 档不画小径：整世界尺度下 160+ 段小径会把图糊满，只留官道（域与域之间的大势）
+    roads_drawn = 0
     if show_roads:
         for rd in wm.roads():
+            if rd.kind != "road" and not TI["show_trails"]:
+                continue
             pts = [w2p(px_, py_) for px_, py_ in smooth_polyline(rd.points, seg_samples=4)]
             inside = [(x, y) for x, y in pts if -60 <= x <= px + 60 and -60 <= y <= px + 60]
             if len(inside) < 2:
                 continue
+            roads_drawn += 1
             if rd.kind == "road":
                 brush_stroke(surf, inside, _INK, width=3, taper=True)
             else:
                 brush_stroke(surf, inside, _INK_LIGHT, width=2, taper=True)
 
     # 6) 城镇：墨点（主城更大 + 双圈），主城注地名
-    towns = list(wm.towns())
+    # `far` 档只画主城：整世界有 206 座镇，全画出来会连成一片麻点、看不出"方位"
+    towns = [t for t in wm.towns() if TI["min_town"] == "all" or t.is_main]
     towns.sort(key=lambda t: (not t.is_main, t.name))
     labeled = 0
     font = None
@@ -406,6 +465,12 @@ def render_atlas(wm, cx, cy, span, px, seed=20260910, labels=True,
     # 7) 探索边界合成：把踏勘过的格换成实景
     if real_surf is not None and exp_cells:
         _apply_explored(surf, real_surf, wm, exp_cells, cx, cy, span, px, n, cell)
+    if out_stats is not None:
+        out_stats.update(tier=TI["name"], motif_kinds=TI["motif_kinds"],
+                         show_trails=TI["show_trails"], min_town=TI["min_town"],
+                         towns=len(towns), towns_total=len(wm.towns()),
+                         roads=roads_drawn, labels=labeled,
+                         explored_cells=(len(exp_cells) if exp_cells else 0))
     return surf
 
 

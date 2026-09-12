@@ -379,7 +379,45 @@ try {
     /日/.test(routeDays) && /里/.test(routeDays) && !routeDays.includes("3 日"),
     routeDays.replace(/\s+/g, " ").slice(0, 70));
 
-  // 6c 执行候选 → 位置/日志随之变化（时间轴按真实路径推进）
+  // 6c) 缩放（T6）：档位制；缩小后**可点击的城镇必须变多**——
+  //     否则底图上有镇、却不可点（图上与交互对不上，这是缩放最容易踩的坑）。
+  const zoomOutBtn = byText(".zoom button", "－");
+  const zoomInBtn = byText(".zoom button", "＋");
+  check("6c 地图有缩放按钮（＋/－）", !!zoomOutBtn && !!zoomInBtn);
+  if (zoomOutBtn && zoomInBtn) {
+    const before = document.querySelectorAll("svg.map .towns .tw").length;
+    const nearbyBefore = textOf(".map-nearby");
+    // 连点两次"缩小"（8000 → 20000 里），等城镇点真的变多
+    const zoomed = await clickUntil(
+      () => {
+        const b = byText(".zoom button", "－");
+        return b && !b.disabled ? b : null;
+      },
+      () => document.querySelectorAll("svg.map .towns .tw").length > before,
+      20000,
+    );
+    const after = document.querySelectorAll("svg.map .towns .tw").length;
+    check("6c 缩小后城镇点变多（下发半径随视图走）", zoomed && after > before,
+      `城镇点 ${before} → ${after}`);
+    check("6c 顶部「周边」里数随之变化",
+      !!nearbyBefore && textOf(".map-nearby") !== nearbyBefore,
+      `${nearbyBefore} → ${textOf(".map-nearby")}`);
+    // 复位：回到默认视野
+    const resetBtn = byText(".zoom button", "复位");
+    if (resetBtn) {
+      const back = await clickUntil(
+        () => byText(".zoom button", "复位"),
+        () => document.querySelectorAll("svg.map .towns .tw").length <= before,
+        20000,
+      );
+      check("6c 「复位」回到默认视野", back,
+        `城镇点 ${document.querySelectorAll("svg.map .towns .tw").length}（原 ${before}）`);
+    } else {
+      check("6c 缩放后可「复位」", false, "没找到复位按钮");
+    }
+  }
+
+  // 6d) 执行候选 → 位置/日志随之变化（时间轴按真实路径推进）
   if (routeShown && !battle) {
     const goBtn = document.querySelector(".routes .route");
     if (goBtn && !goBtn.disabled) {

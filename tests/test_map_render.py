@@ -182,6 +182,26 @@ def _row_correspondence(surface, wm, A, style="real"):
     return out
 
 
+def _tier_of(wm, A, cx, cy, span, tier):
+    """渲染一次，返回实际采用的档位名（显式 tier 覆盖自动判定时用）。"""
+    st = {}
+    A.render_atlas(wm, cx, cy, span, _VIEW_PX, seed=_SEED, tier=tier, out_stats=st)
+    return st.get("tier")
+
+
+def _ink_pixels(A, wm, cx, cy, span, tier):
+    """采样数一遍"非纸底"像素（细节量的粗指标，只用于**同 span 下**的两档对比）。"""
+    s = A.render_atlas(wm, cx, cy, span, _VIEW_PX, seed=_SEED, labels=False, tier=tier)
+    P = A._PAPER
+    n = 0
+    for j in range(0, _VIEW_PX, 2):
+        for i in range(0, _VIEW_PX, 2):
+            c = s.get_at((i, j))[:3]
+            if max(abs(int(a) - int(b)) for a, b in zip(c, P)) > 12:
+                n += 1
+    return n
+
+
 def _cell_count(wm):
     """引擎每轴格数（`_N` 是**模块常量**，WorldMap 实例上没有这个属性）。"""
     import engine.worldmap as _WM
@@ -373,6 +393,36 @@ def main():
     same2 = all(outside.get_at((i, j)) == plain.get_at((i, j))
                 for j in range(0, _VIEW_PX, 7) for i in range(0, _VIEW_PX, 7))
     check("G4 视图外的踏勘格不影响本图", same2, "")
+
+    # ---------- H. 舆图细节分级（T6 缩放：远看大势、近看细处）----------
+    print("\nH. 舆图细节分级：远档只留大势，近档给全")
+    st_far = {}
+    A.render_atlas(wm, cx, cy, 20000.0, _VIEW_PX, seed=_SEED, out_stats=st_far)
+    st_near = {}
+    A.render_atlas(wm, cx, cy, 4000.0, _VIEW_PX, seed=_SEED, out_stats=st_near)
+    print("   远档: %s" % st_far)
+    print("   近档: %s" % st_near)
+    check("H1 整世界尺度自动取远档", st_far["tier"] == "far", str(st_far["tier"]))
+    check("H2 一个域的尺度自动取近档", st_near["tier"] == "near", str(st_near["tier"]))
+    check("H3 远档只画**主城**（206 座全画会糊成麻点）",
+          st_far["min_town"] == "main" and 0 < st_far["towns"] < st_far["towns_total"] // 4,
+          "画了 %d / %d" % (st_far["towns"], st_far["towns_total"]))
+    check("H4 近档画全部城镇", st_near["min_town"] == "all"
+          and st_near["towns"] == st_near["towns_total"],
+          "画了 %d / %d" % (st_near["towns"], st_near["towns_total"]))
+    check("H5 远档不画小径（只留官道）", st_far["show_trails"] is False, "")
+    check("H6 近档画小径", st_near["show_trails"] is True, "")
+    check("H7 远档母题只留山（沙/草/林/沼会糊成噪声）",
+          st_far["motif_kinds"] == ("mount",), str(st_far["motif_kinds"]))
+    check("H8 近档母题种类齐全", len(st_near["motif_kinds"]) >= 5, str(st_near["motif_kinds"]))
+    check("H9 显式 tier 覆盖自动判定",
+          _tier_of(wm, A, cx, cy, 4000.0, "far") == "far",
+          "显式 far 在 4000 里下未被采用")
+    check("H10 远档画出的像素确实比近档少（细节真的减了）",
+          _ink_pixels(A, wm, cx, cy, 20000.0, "far")
+          < _ink_pixels(A, wm, cx, cy, 20000.0, "near"),
+          "far=%d near=%d" % (_ink_pixels(A, wm, cx, cy, 20000.0, "far"),
+                              _ink_pixels(A, wm, cx, cy, 20000.0, "near")))
 
     print("\n== 结果：%d 过 / %d 败 ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0
