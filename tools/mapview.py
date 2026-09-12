@@ -138,12 +138,17 @@ for (let j = 0; j < PX; j++) {
   }
 }
 const s = PX / SPAN;
+// ⚠️ **y 轴翻转**（2026-09-11 修）：地形行是按引擎数组顺序铺的（第 0 行 = y=0 = 最南），
+// 而定案 §3.1 是「原点在西南角」= y 越大越靠北。下面的河/路/点/城镇若直接 `y*s`，
+// 就会与地形**上下镜像**（同一个 bug 也出现在舆图底图与实景底图上）。
+// 统一用 `Y(y) = PX - y*s` 把世界 y 映到屏幕 y（北在上）。
+const Y = (wy) => PX - wy * s;
 // 河流（视觉宽度 1.5px）
 ctx.lineCap = 'round';
 ctx.strokeStyle = '#4d8fd0'; ctx.lineWidth = 1.5;
 for (const rv of D.rivers) {
   ctx.beginPath();
-  rv.pts.forEach((p, k) => k ? ctx.lineTo(p[0]*s, p[1]*s) : ctx.moveTo(p[0]*s, p[1]*s));
+  rv.pts.forEach((p, k) => k ? ctx.lineTo(p[0]*s, Y(p[1])) : ctx.moveTo(p[0]*s, Y(p[1])));
   ctx.stroke();
 }
 // 路网（官道 1.6px 暖金 / 小径 0.9px 暗金）
@@ -151,16 +156,16 @@ for (const rd of D.roads) {
   ctx.strokeStyle = rd.kind === 'road' ? '#e8c98a' : '#9c8654';
   ctx.lineWidth = rd.kind === 'road' ? 1.6 : 0.9;
   ctx.beginPath();
-  rd.pts.forEach((p, k) => k ? ctx.lineTo(p[0]*s, p[1]*s) : ctx.moveTo(p[0]*s, p[1]*s));
+  rd.pts.forEach((p, k) => k ? ctx.lineTo(p[0]*s, Y(p[1])) : ctx.moveTo(p[0]*s, Y(p[1])));
   ctx.stroke();
 }
 // 内容点（1px 小点）
 ctx.fillStyle = 'rgba(255,255,255,.45)';
-for (const p of D.points) ctx.fillRect(p.x*s, p.y*s, 1, 1);
+for (const p of D.points) ctx.fillRect(p.x*s, Y(p.y), 1, 1);
 // 城镇
 for (const t of D.towns) {
   ctx.beginPath();
-  ctx.arc(t.x*s, t.y*s, t.m ? 3.2 : 2.0, 0, 6.2832);
+  ctx.arc(t.x*s, Y(t.y), t.m ? 3.2 : 2.0, 0, 6.2832);
   ctx.fillStyle = t.m ? '#ffd45e' : '#d8b26a';
   ctx.fill();
   ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 0.6; ctx.stroke();

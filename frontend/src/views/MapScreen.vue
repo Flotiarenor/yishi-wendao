@@ -44,14 +44,13 @@ function unpx(ev: MouseEvent) {
   const svg = ev.currentTarget as SVGSVGElement;
   const rect = svg.getBoundingClientRect();
   if (!rect.width || !rect.height) return null;
-  // viewBox 是 0..SIZE 的正方形；按实际渲染尺寸等比换算（PAD 为边距）
+  // viewBox 是 0..SIZE 的正方形；按实际渲染尺寸等比换算
   const vx = ((ev.clientX - rect.left) / rect.width) * SIZE;
   const vy = ((ev.clientY - rect.top) / rect.height) * SIZE;
-  const half = SIZE / 2 - PAD;
   const self = mv.value?.self;
   if (!self) return null;
-  const x = self.x + ((vx - SIZE / 2) / half) * R.value;
-  const y = self.y - ((vy - SIZE / 2) / half) * R.value;
+  const x = self.x + ((vx - SIZE / 2) / HALF) * R.value;
+  const y = self.y - ((vy - SIZE / 2) / HALF) * R.value;
   return { x, y };
 }
 
@@ -102,13 +101,19 @@ const DIRS = ["北", "东北", "东", "东南", "南", "西南", "西", "西北"
 
 // ---------- SVG 投影 ----------
 const SIZE = 560;
-const PAD = 26;
+/** 半幅（像素）：**底图铺满整个画布**，故半幅就是 SIZE/2。
+ *
+ * ⚠️ 这里曾有 `PAD = 26` 的内缩，是坐标错位的**第二个**成因：
+ * 底图（后端渲染）把 `span` 里数铺满 `SIZE` 像素，而叠加层把同样的 `span` 挤进
+ * `SIZE - 2*PAD`，于是**同一个世界坐标在两层上落在不同像素**——离中心越远差越多
+ * （中心重合，所以只核对中心时看不出来）。两个层要叠在一起，就必须**同一套半幅**。
+ * 2026-09-11 与 `tools/atlas.py` 的 y 翻转一并修正。 */
+const HALF = SIZE / 2;
 const R = computed(() => mv.value?.radius_li || 4000);
 const px = (x: number, y: number) => {
-  const half = SIZE / 2 - PAD;
-  const sx = ((x - (mv.value?.self.x ?? 0)) / R.value) * half;
+  const sx = ((x - (mv.value?.self.x ?? 0)) / R.value) * HALF;
   // 世界 y 向上（北），SVG y 向下 → 取负
-  const sy = -((y - (mv.value?.self.y ?? 0)) / R.value) * half;
+  const sy = -((y - (mv.value?.self.y ?? 0)) / R.value) * HALF;
   return [SIZE / 2 + sx, SIZE / 2 + sy] as const;
 };
 /**
@@ -133,10 +138,11 @@ const gridLines = computed(() => {
   const out: { d: string; label: string }[] = [];
   for (let i = -4; i <= 4; i++) {
     if (i === 0) continue;
-    const off = (i * step * (SIZE / 2 - PAD)) / R.value;
+    // 网格必须与 px() 用**同一半幅**，否则网格线与图上的城镇不对齐
+    const off = (i * step * HALF) / R.value;
     const c = SIZE / 2 + off;
-    out.push({ d: `M ${c} ${PAD} L ${c} ${SIZE - PAD}`, label: `${Math.abs(i * step)}里` });
-    out.push({ d: `M ${PAD} ${c} L ${SIZE - PAD} ${c}`, label: `${Math.abs(i * step)}里` });
+    out.push({ d: `M ${c} 0 L ${c} ${SIZE}`, label: `${Math.abs(i * step)}里` });
+    out.push({ d: `M 0 ${c} L ${SIZE} ${c}`, label: `${Math.abs(i * step)}里` });
   }
   return out;
 });

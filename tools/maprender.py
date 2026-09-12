@@ -105,6 +105,11 @@ def terrain_surface_fast(wm, px, shade=True, style="real"):
 
     ⚠️ 这是**格级**底图（会有格的方块感，因为世界栅格只有 400×400 = 50 里/格）。
     它用于"整世界 / 远距离"以及**实时平移缩放**；近距离要连续采样时用 `render_tile(detail=True)`。
+
+    ⚠️ **返回的 Surface 是「北在上」**（2026-09-11 修）：`wm._base` 是引擎数组顺序
+    （第 0 行 = y=0 = 最南 = 原点在西南角），直接 `frombuffer` 出来会**南在上**。
+    这里把行序**倒过来**，与 `tools/atlas.py` 的 `w2p`、前端 SVG 叠加层统一朝向。
+    （曾经没翻，于是底图与前端的可点击城镇点上下镜像，表现为"城镇点跑到湖里"。）
     """
     import pygame
     n = WM._N                      # ⚠️ 是**模块常量** WM._N，不是实例属性
@@ -115,16 +120,22 @@ def terrain_surface_fast(wm, px, shade=True, style="real"):
     strength = 0.10 if style == "atlas" else 0.28    # 舆图只做很轻的明暗，免得失去平面感
     buf = bytearray(n * n * 3)
     k = 0
+    # 行序倒置：像素第 j 行取引擎第 (n-1-j) 行 → 北在上
     if shade:
-        for idx in range(n * n):
-            r, g, b = _shade(table.get(base[idx], _FALLBACK), elev[idx], strength)
-            buf[k] = r; buf[k + 1] = g; buf[k + 2] = b
-            k += 3
+        for j in range(n):
+            row = (n - 1 - j) * n
+            for i in range(n):
+                idx = row + i
+                r, g, b = _shade(table.get(base[idx], _FALLBACK), elev[idx], strength)
+                buf[k] = r; buf[k + 1] = g; buf[k + 2] = b
+                k += 3
     else:
-        for idx in range(n * n):
-            r, g, b = table.get(base[idx], _FALLBACK)
-            buf[k] = r; buf[k + 1] = g; buf[k + 2] = b
-            k += 3
+        for j in range(n):
+            row = (n - 1 - j) * n
+            for i in range(n):
+                r, g, b = table.get(base[row + i], _FALLBACK)
+                buf[k] = r; buf[k + 1] = g; buf[k + 2] = b
+                k += 3
     surf = pygame.image.frombuffer(bytes(buf), (n, n), "RGB")
     if px and px != n:
         surf = pygame.transform.smoothscale(surf, (px, px))
@@ -145,6 +156,14 @@ def render_tile(wm, cx, cy, span, px, shade=True, detail=True, style="real"):
     # ---- 地形底图 ----
     if detail:
         # 细档：逐像素**连续采样**（无格块感，最好看）——实测 1200×1200 约 50s，适合离线出成品图。
+        #
+        # ⚠️ **y 必须翻转**（2026-09-11 修）：定案 §3.1「坐标原点在**西南角**」= y 越大越靠北，
+        # 而像素 y 越大越靠下。快档（`terrain_surface_fast`）是**引擎数组顺序**
+        # （第 0 行 = y=0 = 最南），描线用的 `to_px` 也是同序且用 `smoothscale` 缩，
+        # 故快档整幅图**自洽地**是"南在上"；而舆图风（`tools/atlas.py` 的 `w2p`）已改为北在上。
+        # 两者不能各走一套：底图要叠在前端 SVG 上（那个是北在上），若底图南在上，
+        # 城镇点 / 路网 / 河流就会与可点击的点**上下镜像**。
+        # 故这里把细档 y 翻转成北在上：py 从 0（图顶 = 视野北边）递增。
         buf = bytearray(px * px * 3)
         base_terrain_at = wm.base_terrain_at
         elevation_at = wm.elevation_at
@@ -152,7 +171,7 @@ def render_tile(wm, cx, cy, span, px, shade=True, detail=True, style="real"):
         strength = 0.10 if style == "atlas" else 0.28
         k = 0
         for j in range(px):
-            y = y0 + (j + 0.5) * step
+            y = (cy + half) - (j + 0.5) * step
             for i in range(px):
                 x = x0 + (i + 0.5) * step
                 rgb = table.get(base_terrain_at(x, y), _FALLBACK)
@@ -169,20 +188,24 @@ def render_tile(wm, cx, cy, span, px, shade=True, detail=True, style="real"):
         if cached is None:
             cached = terrain_surface_fast(wm, 0, shade=shade, style=style)
             _FAST_CACHE[key] = cached
-        full = cached                                   # n×n，一格一像素
+        full = cached                                   # n×n，一格一像素（**北在上**）
         n = full.get_width()
         cell = WM._CELL_LI
-        # 视图在世界里的格坐标范围 → 源矩形
-        sx0 = (x0 / cell) * (n / (WM._N * 1.0))
-        sy0 = (y0 / cell) * (n / (WM._N * 1.0))
-        ssz = (span / cell) * (n / (WM._N * 1.0))
+        sc = n / (WM._N * 1.0)                          # 引擎格 → 底图像素
+        # 视图在世界里的格坐标范围 → 源矩形。
+        # ⚠️ `full` 已是"北在上"（见 `terrain_surface_fast`），故源矩形的**上边**对应视野**北边**
+        #   `cy + half`，而不是数组里的 `y0`。写反就会让裁切出来的块上下颠倒。
+        sx0 = (x0 / cell) * sc
+        sy0 = ((WM._N * cell - (cy + half)) / cell) * sc
+        ssz = (span / cell) * sc
         src = pygame.Rect(int(round(sx0)), int(round(sy0)), max(1, int(round(ssz))), max(1, int(round(ssz))))
         sub = pygame.Surface((max(1, src.w), max(1, src.h)))
         sub.blit(full, (0, 0), src)
         surf = pygame.transform.smoothscale(sub, (px, px))
 
     def to_px(x, y):
-        return ((x - x0) / step, (y - y0) / step)
+        """世界坐标 → 像素（与 `tools/atlas.py` 的 `w2p` **同朝向**：北在上）。"""
+        return ((x - x0) / step, (cy + half - y) / step)
 
     # ---- 河流（按长度渐变的视觉宽度；真实宽度在定案 §4.4，此处只求可读）----
     for rv in wm.rivers():
