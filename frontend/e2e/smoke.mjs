@@ -340,36 +340,50 @@ try {
   const head = textOf(".panel-head") + textOf(".main-slot");
   check("6a 顶部显示舆图档与视野（真实数值）", /舆图|无舆图/.test(head) && /神识视野|摸索/.test(head), head.slice(0, 80));
 
-  // 6b 选一座城镇 → 查看路线 → 候选带**真实日数**（不再是写死的「移动 3 日」）
+  // 6b 选一座城镇 → 卡片「前往」→ 候选带**真实日数**（不再是写死的「移动 3 日」）
+  //
+  // ⚠️ **必须轮换候选城镇**：世界里有**真的走不到**的镇（隔着绝壁/深海），
+  // 引擎会正确回 `no_path`（面板显示"此处无路可通"）。而 `.tw:not(.here)` 取到的
+  // 是列表里的第一座——它是不是可达纯看运气（实测栽过：某次首座正好是不可达的沧溟关·二，
+  // 于是 6b/6b2/6d 连锁假失败）。这里按顺序试几座，取第一座**规划得出候选**的。
   let routeShown = false;
   let routeDays = "";
-  const dot = document.querySelector("svg.map .towns .tw:not(.here)");
-  if (dot) {
-    dot.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-    // 同理：等卡片真的渲染出来（而不是睡 400ms 赌它出来了）
-    await waitFor(() => !!document.querySelector(".side .card"), 8000);
-    // 交互统一后：卡片上只有「前往」（原来"查看路线"那一步已并入右键）。
-    // ⚠️ 必须**重试到生效**：冷启动期间 `s.canAct` 为假，按钮 disabled —— jsdom 的点击
-    // 会被直接丢掉（这正是 `clickUntil` 存在的理由，别退回"点一次就断言"）。
-    routeShown = await clickUntil(
-      () => {
-        const b = byText(".side button", "前往");
-        return b && !b.disabled ? b : null;
-      },
-      () => !!document.querySelector(".ctxpanel .route"),
-      45000,
-    );
-    const r0 = document.querySelector(".ctxpanel .route");
-    routeDays = r0 ? (r0.textContent || "").trim() : "";
+  let pickedTown = "";
+  const svgMap = document.querySelector("svg.map");
+  const candDots = [...document.querySelectorAll("svg.map .towns .tw:not(.here)")];
+  if (candDots.length) {
+    for (const d of candDots.slice(0, 8)) {
+      d.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      await waitFor(() => !!document.querySelector(".side .card"), 8000);
+      // 交互统一后：卡片上只有「前往」（原来"查看路线"那一步已并入右键）。
+      // ⚠️ 必须**重试到生效**：冷启动期间 `s.canAct` 为假，按钮 disabled ——
+      // jsdom 的点击会被直接丢掉（这正是 `clickUntil` 存在的理由）。
+      const ok = await clickUntil(
+        () => {
+          const b = byText(".side button", "前往");
+          return b && !b.disabled ? b : null;
+        },
+        () => !!document.querySelector(".ctxpanel .route")
+          || !!document.querySelector(".ctxpanel .plan-err"),
+        30000,
+      );
+      if (!ok) continue;                       // 规划都没回来 → 换一个
+      if (document.querySelector(".ctxpanel .plan-err")) continue;   // 走不到 → 换一个
+      routeShown = true;
+      pickedTown = textOf(".side .card").split("\n")[0].trim();
+      routeDays = (document.querySelector(".ctxpanel .route")?.textContent || "").trim();
+      break;
+    }
     if (!routeShown) {
-      // 失败时把面板/卡片原文带出来，便于定位（而不是只报一句 false）
       const box = document.querySelector(".ctxpanel") || document.querySelector(".side");
-      routeDays = "（未出候选）原文：" + (box ? (box.textContent || "").trim() : "（空）");
+      routeDays = "（试了 " + Math.min(8, candDots.length) + " 座镇都没候选）原文："
+        + (box ? (box.textContent || "").trim().slice(0, 80) : "（空）");
+      void svgMap;
     }
   } else {
     routeDays = "（地图上没找到「非脚下」的城镇点）";
   }
-  check("6b 点城镇 → 卡片有「前往」→ 出候选路径", routeShown);
+  check("6b 点城镇 → 卡片有「前往」→ 出候选路径", routeShown, pickedTown);
   // ⚠️ 判据要**解析出天数**再比，不能 `!routeDays.includes("3 日")`——那是子串匹配，
   // "34.3 日"/"13.2 日" 里都含 "3 日"，会把真实耗时误判成"写死 3 日"（实测踩过）。
   const daysM = routeDays.match(/([\d.]+)\s*日/);
