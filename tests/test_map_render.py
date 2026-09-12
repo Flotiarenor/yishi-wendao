@@ -327,6 +327,52 @@ def main():
           "HALF 引用次数 %d" % src.count("HALF"))
     check("F5 底图 URL 请求整幅（px=SIZE）",
           bool(re.search(r"&px=\$\{SIZE\}", src)), "底图 URL 里的 px 不是 SIZE")
+    check("F6 底图用 composed（两层迷雾：舆图底 + 踏勘区实景）",
+          "style=composed" in src, "底图 URL 不是 composed")
+
+    # ---------- G. 探索边界（两层迷雾的可视化）----------
+    print("\nG. 探索边界：只有踏勘过的格换实景，别处一格不动")
+    cell_li = 50.0
+    try:
+        import engine.worldmap as _WM2
+        cell_li = float(_WM2._CELL_LI)
+    except Exception:  # noqa: BLE001
+        pass
+    # 取视图中心附近的一格做"踏勘"，另一处远处做"未踏勘"对照
+    ccx = int(cx // cell_li)
+    ccy = int(cy // cell_li)
+    exp_cells = {(ccx, ccy)}                      # 只踏勘中心这一格
+    plain = A.render_atlas(wm, cx, cy, _SPAN, _VIEW_PX, seed=_SEED, labels=False)
+    withx = A.render_atlas(wm, cx, cy, _SPAN, _VIEW_PX, seed=_SEED, labels=False,
+                           explored={"cells": exp_cells})
+    c = _VIEW_PX // 2
+    gpx = max(1, int(cell_li * _VIEW_PX / _SPAN))
+    y0_, y1_ = c - gpx, c + gpx
+    x0_, x1_ = c - gpx, c + gpx
+    inside = [(i, j) for j in range(max(0, y0_), min(_VIEW_PX, y1_ + 1))
+              for i in range(max(0, x0_), min(_VIEW_PX, x1_ + 1))]
+    changed_in = sum(1 for (i, j) in inside
+                     if plain.get_at((i, j))[:3] != withx.get_at((i, j))[:3])
+    check("G1 踏勘格**确实**被换掉了（该处有像素变化）", changed_in > 0,
+          "格中心 %dx%d 邻域内变化 %d 像素" % (gpx, gpx, changed_in))
+    # 对照：视图角上（远离中心格）不应有任何变化
+    far = [(i, j) for j in range(0, 40) for i in range(0, 40)]
+    changed_far = sum(1 for (i, j) in far
+                      if plain.get_at((i, j))[:3] != withx.get_at((i, j))[:3])
+    check("G2 未踏勘处**一格不动**（对照角区 40×40 无变化）", changed_far == 0,
+          "角区变化 %d 像素" % changed_far)
+    # 空集合 / None == 纯舆图（逐字节）
+    none_atlas = A.render_atlas(wm, cx, cy, _SPAN, _VIEW_PX, seed=_SEED, labels=False,
+                                explored={"cells": set()})
+    same = all(none_atlas.get_at((i, j)) == plain.get_at((i, j))
+               for j in range(0, _VIEW_PX, 7) for i in range(0, _VIEW_PX, 7))
+    check("G3 explored 为空时与纯舆图一致（不引入副作用）", same, "")
+    # 视图外的格不该影响这张图
+    outside = A.render_atlas(wm, cx, cy, _SPAN, _VIEW_PX, seed=_SEED, labels=False,
+                             explored={"cells": {(1, 1)}})     # 世界西南角，远在视图外
+    same2 = all(outside.get_at((i, j)) == plain.get_at((i, j))
+                for j in range(0, _VIEW_PX, 7) for i in range(0, _VIEW_PX, 7))
+    check("G4 视图外的踏勘格不影响本图", same2, "")
 
     print("\n== 结果：%d 过 / %d 败 ==" % (_PASS, _FAIL))
     return 1 if _FAIL else 0

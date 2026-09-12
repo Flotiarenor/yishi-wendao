@@ -8,7 +8,7 @@
   D. 手动探路也揭示：无舆图走 march 同样"亲身踏勘"（定案 §5 的揭示方式之一）
   E. 地图下发口径：`known` = 神识视野内 ∪ discovered；未探明只给轮廓不留真名
   F. 坐标目的地（右键"走到那里"）：预览/执行共用寻路管线；无舆图仍被拒；越界被夹住
-  G. 存档往返：`discovered` 存进 world 键（**键数仍恰 6 个**）；载入后仍生效
+  G. 存档往返：`discovered` / `explored` 存进 world 键（**键数恰 7 个**）；载入后仍生效
 
 ⚠️ 本文件的直接 `Game(...)` 和未加 save_dir 的 `GameSession` 只写内存；最后一个用例显式落到
    系统临时目录（workspace-write 沙箱会拒——那是沙箱策略，不是代码故障）。
@@ -271,8 +271,9 @@ g = new_game()
 g._set_pos_arrived(near.x + 10.0, near.y + 10.0)
 g.discover_here()
 snap = g.snapshot()
-check("G1 world 键仍恰 6 个（discovered 不额外占键）",
-      set(snap["world"]) == {"world_seed", "pos", "discovered", "places", "world_diff", "map_level"},
+check("G1 world 键恰 7 个（discovered / explored 都不额外占键）",
+      set(snap["world"]) == {"world_seed", "pos", "discovered", "places", "world_diff",
+                             "map_level", "explored"},
       str(sorted(snap["world"])))
 check("G2 discovered 落档且为排序 list",
       isinstance(snap["world"]["discovered"], list) and snap["world"]["discovered"] == sorted(snap["world"]["discovered"]),
@@ -427,6 +428,85 @@ if _ok_import:
     check("I7 启动器脚本与图标都在（tools/make_shortcut.ps1 + assets/app.ico）",
           os.path.exists(os.path.join(ROOT, "tools", "make_shortcut.ps1"))
           and os.path.exists(os.path.join(ROOT, "assets", "app.ico")), "")
+
+# ============ J. 实地踏勘区域（explored）——两层迷雾的"实景"依据 ============
+# 判据重点：`explored` **只有真的到过**才写，买来的情报**绝不能**写它。
+# 这是"舆图 vs 实景"两层迷雾的语义底座（定案 §5）。
+print("\n== J 实地踏勘区域 explored：去过才算，听说不算 ==")
+g = new_game()
+_x0, _y0 = g.pos()
+_cx0, _cy0 = WM.cell_of(_x0, _y0)
+check("J1 开局只踏勘**出生格**一格（人总知道自己脚下）",
+      set(g.state.world.explored) == {(_cx0, _cy0)},
+      str(sorted(g.state.world.explored)))
+
+# ① 落地即记当前格；重复落地不产生重复项（集合语义）
+g.discover_here()
+check("J2 discover_here 记下当前格", (_cx0, _cy0) in g.state.world.explored,
+      str(sorted(g.state.world.explored)))
+g.discover_here()
+check("J3 重复踏勘仍只有一格（幂等）",
+      sorted(g.state.world.explored) == [(_cx0, _cy0)],
+      str(sorted(g.state.world.explored)))
+
+# ② 走一段远路：落点格进 explored，且落点确实是"请求的坐标所在格"
+_ok = g.step("travel", x=_x0 + 300.0, y=_y0 + 300.0, route=0)
+check("J4 远距移动成功（前置条件）", _ok.ok, f"reason={_ok.reason}")
+_cx1, _cy1 = WM.cell_of(*g.pos())
+check("J5 落地格进 explored", (_cx1, _cy1) in g.state.world.explored,
+      f"pos={g.pos()} 格={(_cx1, _cy1)} explored={sorted(g.state.world.explored)}")
+check("J6 起点格仍在 explored（走过的不丢）", (_cx0, _cy0) in g.state.world.explored, "")
+
+# ③ 买情报**只写 discovered，不写 explored**——"听说"不等于"去过"
+_n_exp = len(g.state.world.explored)
+_n_disc = len(g.state.world.discovered)
+g.state.world.map_level = "detailed"
+_fresh = g.reveal_map_intel(11500.0, 11500.0, 600.0)
+check("J7 买情报后 explored **一格未增**（听说 ≠ 去过）",
+      len(g.state.world.explored) == _n_exp,
+      f"买前 {_n_exp} → 买后 {len(g.state.world.explored)}")
+check("J8 买情报确实揭晓了内容点（前置条件成立，否则 J7 是空过）",
+      len(_fresh) > 0 or len(g.state.world.discovered) > _n_disc,
+      f"新揭 {len(_fresh)} 处")
+
+# ④ 下发：map_view 带 explored 与计数
+mv = g.state_data()["map"]
+check("J9 map_view 下发 explored 与 explored_cells",
+      isinstance(mv.get("explored"), list) and mv["counts"].get("explored_cells") == _n_exp,
+      f"explored={len(mv.get('explored', []))} counts={mv['counts'].get('explored_cells')}")
+check("J10 下发的格是 [cx, cy] 二元组",
+      all(isinstance(c, list) and len(c) == 2 for c in mv["explored"]) and len(mv["explored"]) > 0,
+      str(mv["explored"][:3]))
+# ⚠️ 回归：`explored` 曾写在 `if lvl == "detailed"` 分支里，于是**粗舆图**下
+#    `counts.explored_cells=1` 而 `explored=[]`——前后自相矛盾。
+#    踏勘区域是"我走过哪"，与舆图档位**无关**，任何档位都该下发。
+_g2 = new_game()                      # 新局默认 coarse，且已记出生格
+_mv2 = _g2.state_data()["map"]
+check("J10b 粗舆图档下也下发 explored（与 explored_cells 不矛盾）",
+      _mv2["map_level"] != "detailed" and _mv2["counts"]["explored_cells"] == 1
+      and len(_mv2["explored"]) == 1,
+      f"档={_mv2['map_level']} cells={_mv2['counts']['explored_cells']} "
+      f"explored={_mv2['explored']}")
+
+# ⑤ 存档往返：explored 存格坐标、往返成 set[tuple]
+snap = g.snapshot()
+check("J11 explored 落档为排序 list 的 [cx,cy]",
+      isinstance(snap["world"]["explored"], list) and snap["world"]["explored"] == sorted(snap["world"]["explored"]),
+      str(snap["world"]["explored"][:3]))
+g_rt = Game(seed=_SEED)
+g_rt.state = _GS.from_dict(snap)
+check("J12 往返后 explored 一致且为 set[tuple]",
+      g_rt.state.world.explored == g.state.world.explored
+      and all(isinstance(c, tuple) and len(c) == 2 for c in g_rt.state.world.explored),
+      f"{sorted(g_rt.state.world.explored)} vs {sorted(g.state.world.explored)}")
+
+# ⑥ 老档没有 explored → 空集合（**不猜、不伪造**），下次落地补上
+_legacy = WM.WorldState.legacy(_SEED, location="坊市")
+check("J13 老档迁移 explored 为空（不伪造历史足迹）", set(_legacy.explored) == set(), "")
+_d_old = _legacy.to_dict()
+_d_old.pop("explored")                     # 模拟真正的老档（没有这个键）
+check("J14 缺 explored 键的老档可载入且为空集",
+      set(WM.WorldState.from_dict(_d_old).explored) == set(), "")
 
 print("\n== 结果：%d 过 / %d 败 ==" % (_PASS, _FAIL))
 sys.exit(1 if _FAIL else 0)

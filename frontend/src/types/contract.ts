@@ -116,11 +116,19 @@ export interface MapView {
   points: MapPoint[];
   /** 河流大势（抽样点 [x, y]） */
   rivers: number[][];
+  /**
+   * **实地踏勘过的格** `[[cx, cy], …]`（走过/落地过；见后端 `WorldState.explored`）。
+   * 与 `discovered` 的区别：后者会被"买情报"灌入（听说），前者只有亲自到过。
+   * 底图渲染由后端按同一份数据完成（`style=composed`），这里只用于统计与提示。
+   */
+  explored: number[][];
   counts: {
     towns: number;
     points: number;
     known_points: number;
     rivers: number;
+    /** 踏勘过的格总数（可能大于 `explored.length`，后者有下发上限） */
+    explored_cells: number;
   };
 }
 

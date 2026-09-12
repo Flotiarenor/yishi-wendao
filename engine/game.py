@@ -492,6 +492,11 @@ class Game:
             _bx, _by = self.pos()
             _bcx, _bcy = WM.cell_of(_bx, _by)
             self.state.world.places["place:%d" % (_bcy * WM._N + _bcx)] = ST.name_of(ST.SHISHI)
+            # 出生格也算"站过"（人总知道自己脚下这一格）。
+            # ⚠️ 这里**不调 `discover_here()`**：那个要 `visible_points()` → **建世界 ≈6 s**，
+            # 而开局必须便宜（`state_data()` 不许触发建世界，这是铁律）。
+            # 出生地附近的内容点会在第一次移动/探索时由 `discover_here()` 一并补上。
+            self.state.world.explored.add((_bcx, _bcy))
             # 开局灵气 = 当前境界灵气池上限（否则所有技能都因 low_qi 放不出来）
             p.qi = float(BTL.battle_stats(p.realm_idx)["qi_max"])
             self.state.chronicle.add(
@@ -1190,7 +1195,7 @@ class Game:
     _DISCOVER_TEXT_KINDS = ("vein", "secret")   # 典籍里可循迹者：报真名
 
     def discover_here(self, pos=None) -> tuple:
-        """在指定坐标（默认当前位置）做一次**神识踏勘**，把视野内的内容点写进 `discovered`。
+        """在指定坐标（默认当前位置）做一次**神识踏勘**：写 `discovered` 与 `explored`。
 
         定案 §5：实地层（矿脉/灵草/兽巢/遗迹/秘境入口/小径/驿站）**未知，需揭示**，
         揭示方式之一是**神识半径**（随境界、按地形遮蔽缩减）。
@@ -1198,8 +1203,13 @@ class Game:
         所以"已知"实际等价于"此刻在视野内"——走过的地方一转身就忘了。
         本方法把那条缺失的写入路径补上：**"走过即知"**。
 
-        语义（**唯一的判据来源**）：`discovered` = 玩家**曾亲身到过的位置**的神识视野内的内容点全集。
-        视野判定一律委托 `WorldMap.visible_points()`（不再自己算半径），避免出现第二套口径。
+        写两个集合，语义不同（见 `WorldState` 的表格）：
+          - `discovered` += 神识视野内的**内容点**（会传下去的"已知"）；
+          - `explored`   += 本次所在的**格**（玩家真的站过的格，画实景区域用）。
+
+        ⚠️ 只记"站过的格"，**不记途经格**：移动是"起终点 + 一条路径"，
+        目前没有沿途逐格回调。若将来要精确到"沿路走过的每一格"，在移动循环里逐格调用
+        本方法即可（本方法本身幂等、便宜）。
 
         ⚠️ 会触发世界生成（首次 ≈6 s）——**只在移动落地时调用**，绝不可放进 `state_data()`。
 
@@ -1211,11 +1221,20 @@ class Game:
         seen = wm.visible_points(x, y, realm)
         disc = self.state.world.discovered
         fresh = tuple(p for p in seen if p.id not in disc)
+        changed = False
         if fresh:
             for p in fresh:
                 disc.add(p.id)
-            # 缓存失效版本号：`discovered` 是**集合**，用 len() 当版本号会在
-            # "加一个减一个"时长度相同 → `_map_memo` 静默返回过期的迷雾结果。
+            changed = True
+        # 站过的格（"实地层"的边界）——`explored` 与 `discovered` 独立，
+        # 因为买来的情报会写 `discovered` 但**不该**点亮实景（那是"听说"不是"去过"）。
+        cx, cy = WM.cell_of(x, y)
+        if (cx, cy) not in self.state.world.explored:
+            self.state.world.explored.add((cx, cy))
+            changed = True
+        if changed:
+            # 缓存失效版本号：集合**不能用 len() 当版本号**（"加一个减一个"时长度相同
+            # → `_map_memo` 静默返回过期的迷雾结果）。
             self._disc_ver += 1
         return seen, fresh
 
@@ -1248,9 +1267,15 @@ class Game:
         """**买来的情报**：把 (x, y) 半径内的内容点写进 `discovered`（返回新揭晓的点）。
 
         与 `discover_here()` 的区别（两者共用同一份"已发现"真相，只是来源不同）：
-          - `discover_here()` = **亲自踏勘**：以**神识视野**（随境界 + 地形遮蔽）为半径；
+          - `discover_here()` = **亲自踏勘**：以**神识视野**（随境界 + 地形遮蔽）为半径，
+            同时写 `explored`（真的站过）；
           - `reveal_map_intel()` = **买来的消息**：以**货单给的半径**为准，
             **不受境界与地形遮蔽限制**（这就是"情报是资源"的意思——弱者也能买到强信息）。
+
+        ⚠️ **只写 `discovered`，绝不写 `explored`**：买来的是"听说"，
+        不是"去过"。地图上"走过才画实景"那条边界（定案 §5 两层迷雾）必须靠
+        `explored`——否则买一份情报就能点亮一片实景，语义就崩了。**别在这里加 explored。**
+
         未探明的内容点**不下发**（不是"给轮廓"，而是连"这里有一处"都不知道）。
         """
         wm = self.wmap
@@ -1364,6 +1389,10 @@ class Game:
         内容点分三档可见性（T4 会把"已知"接成真机制，现在 `discovered` 已就位）：
         ① 神识视野内（随境界，地形遮蔽）；② `world.discovered` 里记着的；③ 其余不给。
 
+        另下发 `explored`：**玩家真的站过的格**（画实景区域用，见 `WorldState` 的说明）。
+        与 `discovered` 的区别很重要——`discovered` 会被"买情报"灌入（听说），
+        `explored` 只有亲自到过（去过）。两者都可能很大，故用 `EXPLORED_SEND_MAX` 兜底。
+
         ⚠️ 本方法**会触发世界生成**（首次 ≈6 s），故只在需要时调；结果按
         (坐标, 舆图档, 境界, discovered 版本) 缓存，状态快照不会反复触发。
         """
@@ -1383,11 +1412,12 @@ class Game:
             "map_level": lvl,
             "radius_li": rad,
             "vision_li": round(self.wmap.vision_radius(realm, self._vision_tid()), 1),
-            "towns": [], "points": [], "rivers": [], "counts": {},
+            "towns": [], "points": [], "rivers": [], "explored": [], "counts": {},
         }
         if lvl == "none":
             # 无舆图：只给自身坐标（"两眼一抹黑"，定案 §5）
-            out["counts"] = {"towns": 0, "points": 0, "known_points": 0, "rivers": 0}
+            out["counts"] = {"towns": 0, "points": 0, "known_points": 0, "rivers": 0,
+                             "explored_cells": 0}
             self._map_memo.clear()
             self._map_memo[key] = out
             return out
@@ -1429,9 +1459,19 @@ class Game:
                 for (rx, ry) in rv.points[::S.MAP_RIVER_STRIDE]:
                     if math.hypot(rx - x, ry - y) <= rad:
                         out["rivers"].append([round(rx, 1), round(ry, 1)])
+        # 实地踏勘区域（走过 / 落地过的格）——**只有真的到过才算**，
+        # 买情报写的 `discovered` **不算**（那是"听说"）。见 `WorldState` 的说明。
+        #
+        # ⚠️ 这一段必须在 `if lvl == "detailed"` **之外**：踏勘区域是"我走过哪"，
+        # 与舆图档位无关——粗舆图下也该下发。曾经写在 detailed 分支里，
+        # 于是 `counts.explored_cells=1` 而 `explored=[]`（前后自相矛盾）。
+        exp = self.state.world.explored
+        out["explored"] = [[int(c[0]), int(c[1])]
+                           for c in sorted(exp)[:S.EXPLORED_SEND_MAX]]
         out["counts"] = {"towns": len(out["towns"]), "points": len(out["points"]),
                          "known_points": sum(1 for q in out["points"] if q["known"]),
-                         "rivers": len(out["rivers"])}
+                         "rivers": len(out["rivers"]),
+                         "explored_cells": len(self.state.world.explored)}
         self._map_memo.clear()
         self._map_memo[key] = out
         return out

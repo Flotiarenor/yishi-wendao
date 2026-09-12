@@ -5,7 +5,7 @@
   B. 两段式 travel：预览是纯查询（不推进 t / 不移动）；route=<n> 才执行
   C. 舆图档位：none 只给 march；coarse 给 1 条；detailed 给 3 条
   D. 手动探路：直线推进；遇硬阻挡 / 水域停下；绝不自动绕行；上限 300 里
-  E. 存档：world 键恰 6 个；往返一致；老档（无 world）迁到锚点
+  E. 存档：world 键恰 7 个；往返一致；老档（无 world）迁到锚点
   F. 旧地点连接：不建世界即可互访；坊市门槛按坐标距离
   G. 近距/派生标签：同聚落挪动走捷径；location 标签随移动更新
 
@@ -196,7 +196,7 @@ g.state.world = g.state.world.__class__(
     discovered={"p_1", "p_2"})
 snap = g.snapshot()
 check("E1 to_dict 含 world 键", "world" in snap)
-check("E2 world 键恰 6 个", len(snap["world"]) == 6, str(sorted(snap["world"])))
+check("E2 world 键恰 7 个", len(snap["world"]) == 7, str(sorted(snap["world"])))
 g_town = next(t for t in g.wmap.towns if not t.is_main)
 g.step("travel", site=g_town.name, route=0)
 snap2 = g.snapshot()

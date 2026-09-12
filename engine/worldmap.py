@@ -499,16 +499,33 @@ class PathResult:
 
 @dataclass
 class WorldState:
-    """存档里的世界差异（**只存差异**：地形 / 路网 / 城镇都是 `f(world_seed)` 重建）。"""
+    """存档里的世界差异（**只存差异**：地形 / 路网 / 城镇都是 `f(world_seed)` 重建）。
+
+    `discovered` 与 `explored` 是**两件不同的事**（P4-T4 迷雾分两层，别混）：
+
+    | 字段 | 含义 | 谁写 |
+    |---|---|---|
+    | `discovered` | **内容点**层面的已知（矿脉/灵草/兽巢…的 id 集合） | 亲自踏勘（神识视野内）**或**买来的情报 |
+    | `explored` | **实地踏勘过的格**（走过 / 落地过的格中心的 (cx,cy)） | 只有`discover_here()`（= 真的到过） |
+
+    为什么要分开：`discovered` 可以被"买情报"灌进来，那是**听说**；
+    而地图上"走过的地方才画实景、没走过的仍是舆图"（定案 §5 两层迷雾）
+    依据的必须是**真的去过**——否则买一份情报就能把一片实景点亮，语义就崩了。
+    """
     world_seed: int = 0
     pos: tuple = (0.0, 0.0)
     discovered: set = field(default_factory=set)
     places: dict = field(default_factory=dict)
     world_diff: dict = field(default_factory=dict)
     map_level: str = "none"
+    explored: set = field(default_factory=set)
 
     def to_dict(self) -> dict:
-        """序列化；键集合**恰为** 6 个（地形 / 路网 / 位图一律不存）。"""
+        """序列化；键集合**恰为 7 个**（地形 / 路网 / 位图一律不存）。
+
+        `explored` 存的是**格坐标** `(cx, cy)` 列表（不是位图，也不存浮点位置）：
+        一个 50 里格 ≈ 玩一天走 1 格，长局也就几百格，几 KB；而位图是 16 万格。
+        """
         return {
             "world_seed": int(self.world_seed),
             "pos": [float(self.pos[0]), float(self.pos[1])],
@@ -516,17 +533,24 @@ class WorldState:
             "places": dict(self.places),
             "world_diff": dict(self.world_diff),
             "map_level": str(self.map_level),
+            "explored": sorted((int(c[0]), int(c[1])) for c in self.explored),
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "WorldState":
-        """反序列化：pos 归一为 (float, float)、discovered 归一为 set、缺字段用默认值。"""
+        """反序列化：pos 归一为 (float, float)、集合归一为 set、缺字段用默认值。"""
         d = d or {}
         pos = d.get("pos", (0.0, 0.0))
         try:
             px, py = float(pos[0]), float(pos[1])
         except (TypeError, ValueError, IndexError):
             px, py = 0.0, 0.0
+        explored = set()
+        for c in (d.get("explored", ()) or ()):
+            try:
+                explored.add((int(c[0]), int(c[1])))
+            except (TypeError, ValueError, IndexError):
+                continue
         return cls(
             world_seed=int(d.get("world_seed", 0)),
             pos=(px, py),
@@ -534,6 +558,7 @@ class WorldState:
             places=dict(d.get("places", {}) or {}),
             world_diff=dict(d.get("world_diff", {}) or {}),
             map_level=str(d.get("map_level", "none")),
+            explored=explored,
         )
 
     @classmethod
@@ -541,6 +566,8 @@ class WorldState:
         """老档迁移：旧地点名 → 核心域固定锚点；无舆图状态给 `coarse`（定案 §7）。
 
         `day` 仅为旧调用点兼容保留（时间由 `GameState.t` 唯一承载，不进 WorldState）。
+        老档没有 `explored`——留空即可：旧档玩家"走过的地方"无从考据，
+        下次落地 `discover_here()` 会把当前格补上（**不猜、伪造**）。
         """
         pos = R.LEGACY_ANCHORS.get(location, R.CORE_DOMAIN_CENTER)
         return cls(world_seed=int(world_seed), pos=(float(pos[0]), float(pos[1])),
@@ -550,7 +577,8 @@ class WorldState:
         """返回一个只改了位置的副本（不可变式更新）。"""
         return WorldState(world_seed=self.world_seed, pos=(float(x), float(y)),
                           discovered=set(self.discovered), places=dict(self.places),
-                          world_diff=dict(self.world_diff), map_level=self.map_level)
+                          world_diff=dict(self.world_diff), map_level=self.map_level,
+                          explored=set(self.explored))
 
 
 class CostField:

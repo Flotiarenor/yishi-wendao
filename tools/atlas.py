@@ -212,11 +212,29 @@ def _ward(surf, x, y, s, color=_INK):
 
 
 def render_atlas(wm, cx, cy, span, px, seed=20260910, labels=True,
-                 max_labels=40, show_rivers=True, show_roads=True):
+                 max_labels=40, show_rivers=True, show_roads=True, explored=None):
     """渲染一张舆图：纸底 + 单色墨线 + 粗粒度地貌 + 拟合路网 + 城镇/地名。
 
     逐格扫描（读 `_base` 数组，400×400 = 16 万格，约 30 ms），
     故与输出像素数无关——**天生可实时**。
+
+    ## `explored`：探索边界（定案 §5「两层迷雾」的可视化）
+
+    传 `{"cells": {(cx, cy), …}}` 时，**视野内这些格会被"实景风"覆盖**——
+    走过的地方撕开舆图的纸面、露出真地形，没走过的仍是纸上淡墨。
+    这正是定案 §5 的两层：
+
+    | 层 | 表现 | 依据 |
+    |---|---|---|
+    | **舆图**（我听说过/买来的） | 纸底 + 粗粒度墨色母题 | 全图铺底 |
+    | **实景**（我亲自到过的） | 真地形色块 + 高程明暗 | `WorldState.explored` |
+
+    ⚠️ **依据必须是 `explored`（真的站过），不是 `discovered`**：
+    后者会被"买情报"灌入（听说），拿它画实景会让买一份情报就点亮一片。
+
+    ⚠️ **必须画在纸纹之后、水系/母题之前**：舆图的淡蓝水色与墨是**半透明**的，
+    实景若压在它们**下面**会被透出来，"撕开纸面"的效果就不成立。
+    又因为实景块是**不透明**的，它天然把该处的纸底与母题遮住——不需要额外的遮罩。
     """
     import pygame
     from content import regions as R
@@ -255,6 +273,21 @@ def render_atlas(wm, cx, cy, span, px, seed=20260910, labels=True,
             if v < 0.34:
                 d = int(-6 + 12 * v)
                 surf.set_at((i, j), (max(0, _PAPER[0] + d), max(0, _PAPER[1] + d), max(0, _PAPER[2] + d)))
+
+    # 1.5) **探索边界**：踏勘过的格用实景风盖掉纸面（见 docstring）。
+    # 这里只准备"实景底图"与"格级掩膜"，真正的合成在最后一步（要盖在母题之上）。
+    real_surf = None
+    exp_cells = None
+    if explored:
+        exp_cells = {(int(c[0]), int(c[1]))
+                     for c in (explored.get("cells") if isinstance(explored, dict)
+                               else explored)}
+        if exp_cells:
+            from tools import maprender as MR
+            real_surf = (explored.get("real_surface") if isinstance(explored, dict)
+                         else None)
+            if real_surf is None:
+                real_surf = MR.terrain_surface_fast(wm, 0, shade=True, style="real")
 
     # 2) 水系：先铺淡蓝（格级块），再描海岸线 + 撒波浪母题
     i_lo = max(0, int(math.floor(x0 / cell)))
@@ -369,7 +402,63 @@ def render_atlas(wm, cx, cy, span, px, seed=20260910, labels=True,
                 labeled += 1
         else:
             pygame.draw.circle(surf, _INK, (int(gx), int(gy)), 3)
+
+    # 7) 探索边界合成：把踏勘过的格换成实景
+    if real_surf is not None and exp_cells:
+        _apply_explored(surf, real_surf, wm, exp_cells, cx, cy, span, px, n, cell)
     return surf
+
+
+def _apply_explored(surf, real_surf, wm, exp_cells, cx, cy, span, px, n, cell):
+    """把 `exp_cells`（踏勘过的格）处的舆图画换成实景（**格级**，与迷雾粒度一致）。
+
+    做法：裁出视图对应的实景块 → 按视图内的格画一张**二值掩膜** → 用掩膜把实景块
+    贴上去。掩膜写成**格**而不是像素：
+      - 定案 §5 的迷雾遮的是"内容点/格"这一层，不是面；
+      - 格级掩膜的计算量与踏勘格数成正比（几百格），与像素数无关；
+      - 边缘会沿 50 里格呈阶梯状——**与迷雾粒度一致**，不是缺陷。
+    """
+    import pygame
+    rn = real_surf.get_width()
+    rsc = rn / float(n)                          # 引擎格 → 实景底图像素
+    half = span / 2.0
+    # 视图对应的源矩形。`real_surf` 是**北在上**，故源矩形上边 = 视野北边 `cy + half`
+    src = pygame.Rect(int(round((cx - half) / cell * rsc)),
+                      int(round((n * cell - (cy + half)) / cell * rsc)),
+                      max(1, int(round(span / cell * rsc))),
+                      max(1, int(round(span / cell * rsc))))
+    sub = pygame.Surface((max(1, src.w), max(1, src.h)))
+    sub.blit(real_surf, (0, 0), src)
+
+    # ⚠️ **alpha 处理的三个坑**（这版之前连着错了三次，都记下来）：
+    #   ① `real_surf` 是 **24 位无 alpha**；`smoothscale` 出来的 tile 也没有有效 alpha，
+    #      直接拿掩膜做 `BLEND_RGBA_MULT` 会把**未探索处涂成黑色**（实测整图变黑）；
+    #   ② 用 `tile.set_alpha(255)` 补 alpha 也不行——`set_alpha` 是**整面** alpha，
+    #      会覆盖掉逐像素 alpha，于是掩膜失效、**整张图都变成实景**（实测 100% 像素变了）；
+    #   ③ 正解：**把 tile 建成 32 位带 alpha 的表面**（`convert_alpha()` 在无显示器的
+    #      服务器上会报 "No convert format has been set"，**不能用**），
+    #      用 `fill(..., BLEND_RGBA_MAX)` 把逐像素 alpha 抬到不透明，再让掩膜乘下去。
+    tile = pygame.Surface((px, px), pygame.SRCALPHA)     # 32 位，带逐像素 alpha
+    tile.fill((0, 0, 0, 0))
+    _sc = pygame.transform.smoothscale(sub, (px, px))
+    tile.blit(_sc, (0, 0))
+    tile.fill((255, 255, 255, 255), None, pygame.BLEND_RGBA_MAX)   # 只抬 alpha，不改颜色
+
+    # 格级掩膜：视图内的格 → px/span*cellsize 像素块
+    mask = pygame.Surface((px, px), pygame.SRCALPHA)
+    mask.fill((255, 255, 255, 0))                # 全透明 = "未探索，别盖"
+    gpx = cell * px / span                       # 一格多少像素
+    for (ci, cj) in exp_cells:
+        cwx, cwy = (ci + 0.5) * cell, (cj + 0.5) * cell
+        if abs(cwx - cx) > half + cell or abs(cwy - cy) > half + cell:
+            continue
+        sx = (cwx - (cx - half)) / span * px
+        sy = ((cy + half) - cwy) / span * px
+        mask.fill((255, 255, 255, 255),
+                  pygame.Rect(int(sx - gpx / 2), int(sy - gpx / 2),
+                              max(1, int(gpx)), max(1, int(gpx))))
+    tile.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    surf.blit(tile, (0, 0))
 
 
 _FONT_CACHE = {}

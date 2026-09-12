@@ -140,14 +140,16 @@ def create_app(config: dict = None) -> FastAPI:
     # ---------- 地图底图（P4：舆图风底图，pygame 渲染）----------
     @app.get("/api/map/img")
     def api_map_img(run_id: str = "", x: float = None, y: float = None,
-                    span: float = 12000.0, px: int = 1200, style: str = "atlas",
+                    span: float = 12000.0, px: int = 1200, style: str = "composed",
                     labels: int = 1):
         """世界地图底图 PNG。
 
         - 世界种子来自**存档**（`run_id` → seed），不信任前端传入的 seed（避免看别人的世界）；
         - `x`/`y` 缺省 = 玩家当前位置；`span` = 视图边长（里）；`px` = 输出边长（像素）；
-        - `style`: atlas（舆图风，未探索区）| real（实景风，走过的地方）。
-        - 同一参数组合有内存 LRU 缓存；渲染本身约 0.1s（舆图风逐格扫描，与像素数无关）。
+        - `style`: composed（舆图底 + 踏勘过的格换实景，**默认**）| atlas（纯舆图）| real（纯实景）。
+          `composed` 的探索依据取自**存档里的 `WorldState.explored`**——
+          同样不信任前端参数（否则前端可以"假装走过全图"把迷雾全点亮）。
+        - 同一参数组合有内存 LRU 缓存；舆图风是逐格扫描（与像素数无关，约 0.1s）。
         """
         sess = manager.load(run_id) if run_id else None
         if sess is None:
@@ -159,7 +161,8 @@ def create_app(config: dict = None) -> FastAPI:
             from present import mapimg
             data = mapimg.atlas_png_bytes(seed, float(x), float(y), float(span),
                                           int(px), style=style, labels=bool(labels),
-                                          wm=getattr(sess.g, "wmap", None))
+                                          wm=getattr(sess.g, "wmap", None),
+                                          explored=sess.g.state.world.explored)
         except Exception as e:      # 渲染失败不该把接口打成 500 裸栈
             return _err(500, "render_failed: %s" % e)
         return Response(content=data, media_type="image/png",

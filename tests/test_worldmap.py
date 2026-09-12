@@ -800,8 +800,9 @@ _ws = WM.WorldState(world_seed=_SEED, pos=(8412.5, 3307.25),
                     places={"town_青石镇": {"visited": True, "cleared": False}},
                     world_diff={"域_07": {"faction": "青云宗"}}, map_level="detail")
 _d = _ws.to_dict()
-check("I57a to_dict 键集合恰为 6 个",
-      set(_d) == {"world_seed", "pos", "discovered", "places", "world_diff", "map_level"},
+check("I57a to_dict 键集合恰为 7 个",
+      set(_d) == {"world_seed", "pos", "discovered", "places", "world_diff", "map_level",
+                  "explored"},
       str(sorted(_d)))
 check("I57b 不含地形/路网/河流/城镇/位图键",
       not ({"terrain", "roads", "rivers", "towns", "discovered_bitmap"} & set(_d)))

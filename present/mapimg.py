@@ -63,15 +63,28 @@ def prewarm(seed: int, cx: float, cy: float, span: float = 12000.0, px: int = 12
 
 
 def atlas_png_bytes(seed: int, cx: float, cy: float, span: float, px: int,
-                    style: str = "atlas", labels: bool = True, wm=None) -> bytes:
+                    style: str = "atlas", labels: bool = True, wm=None,
+                    explored=None) -> bytes:
     """渲染一张地图底图并编码成 PNG 字节（给 HTTP 路由直接用）。
 
-    `style`: "atlas" = 舆图风（未探索区）；"real" = 实景风（走过的地方）。
+    `style`:
+      - `"atlas"` = 舆图风（未探索区，纸底 + 单色墨）；
+      - `"real"`  = 实景风（走过的地方）；
+      - `"composed"` = **两层叠加**：舆图作底 + `explored` 的格换成实景
+        （定案 §5 两层迷雾的可视化；`explored` 见 `WorldState` 的说明）。
+
+    `explored`：`{"cells": {(cx, cy), …}}`（也可直接给集合）。仅 `composed` 用。
+      ⚠️ 依据必须是**真的站过**的格（`WorldState.explored`），**不是** `discovered`——
+      后者会被买情报灌入（听说），拿它画实景会"买一份情报点亮一片"。
     """
     px = max(64, min(int(px), 2400))
     span = max(200.0, float(span))
+    cells = None
+    if explored:
+        raw = explored.get("cells") if isinstance(explored, dict) else explored
+        cells = frozenset((int(c[0]), int(c[1])) for c in raw) if raw else None
     key = (int(seed), style, round(float(cx), 1), round(float(cy), 1),
-           round(span, 1), px, bool(labels))
+           round(span, 1), px, bool(labels), cells)
     with _LOCK:
         hit = _CACHE.get(key)
         if hit is not None:
@@ -89,8 +102,16 @@ def atlas_png_bytes(seed: int, cx: float, cy: float, span: float, px: int,
         wm = WM.WorldMap(int(seed))
     if style == "real":
         surf = MR.render_tile(wm, float(cx), float(cy), span, px, shade=True, detail=False)
+    elif style == "composed" and cells:
+        # 实景底图**只建一次**（整世界、格级），视图裁切走 `_apply_explored`——
+        # 否则每换一次视野都要重扫 16 万格。
+        real = MR.terrain_surface_fast(wm, 0, shade=True, style="real")
+        surf = A.render_atlas(wm, float(cx), float(cy), span, px, seed=int(seed),
+                              labels=labels, explored={"cells": cells,
+                                                       "real_surface": real})
     else:
-        surf = A.render_atlas(wm, float(cx), float(cy), span, px, seed=int(seed), labels=labels)
+        surf = A.render_atlas(wm, float(cx), float(cy), span, px, seed=int(seed),
+                              labels=labels)
     # pygame 的 PNG 编码只进文件，故走临时文件（save_extended 需要 SDL_image，已确认可用）
     import pygame
     fd, path = tempfile.mkstemp(suffix=".png")

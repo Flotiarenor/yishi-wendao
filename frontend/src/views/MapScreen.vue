@@ -26,6 +26,8 @@ const curName = computed(() => st.value?.location?.name ?? "");
 const mapLevel = computed(() => mv.value?.map_level ?? "none");
 const hasMap = computed(() => mapLevel.value !== "none");
 const detailed = computed(() => mapLevel.value === "detailed");
+/** 踏勘过的格数（后端统计；`explored` 数组本身有下发上限，故用 counts） */
+const exploredCells = computed(() => mv.value?.counts?.explored_cells ?? 0);
 
 /** 候选路径（点目的地后引擎返回；null = 未选目的地） */
 const routes = ref<TravelRoute[] | null>(null);
@@ -122,15 +124,19 @@ const px = (x: number, y: number) => {
  * 为什么把底图交给后端：地形底图要画 16 万格的地貌母题（海/山/沙/草/林 + 纸纹），
  * 浏览器里逐格绘制会卡；后端**逐格扫描**渲染一张 1200px 图只要 ~0.1s（有 LRU 缓存）。
  * SVG 层继续负责**交互**（点选/悬停/右键/候选路径）——两者分工：底图静态、叠加层动态。
+ *
+ * `style=composed`（P4 探索边界，定案 §5 两层迷雾）：后端把**踏勘过的格换成实景风**，
+ * 没走过的仍是纸上淡墨——"我亲自到过的"与"我听说过/买来的"一眼可分。
+ * 探索依据在**服务端存档**里取（`WorldState.explored`），不吃前端参数
+ * （否则前端可以假装走过全图把迷雾全点亮）。
  */
 const baseSrc = computed(() => {
   const m = mv.value;
   if (!m || m.map_level === "none") return "";
   const center = { x: m.self.x, y: m.self.y };   // 始终以玩家为中心（跟着右键点走会让整图跳动）
   const span = Math.round(R.value * 2);
-  // style：舆图风做底（未探索区）；将来按 discovered 分区时再叠实景层
   return `/api/map/img?run_id=${encodeURIComponent(s.runId ?? "")}` +
-    `&x=${center.x.toFixed(1)}&y=${center.y.toFixed(1)}&span=${span}&px=${SIZE}&style=atlas`;
+    `&x=${center.x.toFixed(1)}&y=${center.y.toFixed(1)}&span=${span}&px=${SIZE}&style=composed`;
 });
 
 const gridLines = computed(() => {
@@ -398,6 +404,12 @@ const kindIcon: Record<string, string> = {
             ｜ 共 {{ mv?.counts.towns }} 镇 / {{ mv?.counts.points }} 处（已知 {{ mv?.counts.known_points }}）
           </div>
           <div v-else>共 {{ mv?.counts.towns }} 镇</div>
+          <!-- 两层迷雾（定案 §5）：底图由后端按 explored 合成，这里只做说明 -->
+          <div>
+            <span class="k fog-atlas"></span> 舆图（听说/买来）
+            <span class="k fog-real"></span> 实景（亲自走过）
+            <template v-if="exploredCells > 0"> ｜ 已踏勘 {{ exploredCells }} 格</template>
+          </div>
         </div>
       </div>
     </div>
@@ -443,6 +455,9 @@ const kindIcon: Record<string, string> = {
 .pt-dot { background: #6cc07a; }
 .pt-known { background: #6cc07a; }
 .pt-unk { background: var(--ink-dim); opacity: .5; }
+/* 两层迷雾的示意色：舆图=纸底淡墨；实景=真地形绿（与后端 terrain_surface_fast 的平原色接近） */
+.fog-atlas { background: #efe6cd; border: 1px solid var(--line); }
+.fog-real { background: #8aa860; }
 .card { background: var(--panel3); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; display: flex; flex-direction: column; gap: 5px; }
 .hd { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .meta { font-size: 11.5px; color: var(--ink-dim); }
