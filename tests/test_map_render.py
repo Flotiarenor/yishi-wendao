@@ -345,8 +345,12 @@ def main():
           "px() 里的 sy 不再取负 → 前端会变成南在上")
     check("F4 投影与其逆运算共用同一 HALF", src.count("HALF") >= 4,
           "HALF 引用次数 %d" % src.count("HALF"))
-    check("F5 底图 URL 请求整幅（px=SIZE）",
-          bool(re.search(r"&px=\$\{SIZE\}", src)), "底图 URL 里的 px 不是 SIZE")
+    check("F5 底图 URL 的 px 跟随**实际显示尺寸**（地图铺满容器，不再写死 SIZE）",
+          bool(re.search(r"&px=\$\{boxPx\.value\}", src)),
+          "底图 URL 里的 px 不是 boxPx.value")
+    check("F5b 显示尺寸被 ResizeObserver 量出来、并取整到 64 的倍数",
+          "ResizeObserver" in src and "Math.ceil(w / 64) * 64" in src,
+          "没找到 ResizeObserver / 64 取整")
     check("F6 底图用 composed（两层迷雾：舆图底 + 踏勘区实景）",
           "style=composed" in src, "底图 URL 不是 composed")
 

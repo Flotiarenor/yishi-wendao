@@ -10,7 +10,7 @@
  *   - 移动：点目的地 → 引擎给候选（最快/最安全/最隐蔽）→ 选定执行（**显示真实耗时**）
  *   - 无舆图（map_level=none）：不给候选，只给八方向「手动探路」
  */
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import EmbeddedPanel from "@/components/EmbeddedPanel.vue";
 import { useSessionStore } from "@/stores/session";
@@ -27,20 +27,45 @@ const curName = computed(() => st.value?.location?.name ?? "");
 const mapLevel = computed(() => mv.value?.map_level ?? "none");
 const hasMap = computed(() => mapLevel.value !== "none");
 const detailed = computed(() => mapLevel.value === "detailed");
-/** 踏勘过的格数（后端统计；`explored` 数组本身有下发上限，故用 counts） */
-const exploredCells = computed(() => mv.value?.counts?.explored_cells ?? 0);
 
-/** 候选路径（点目的地后引擎返回；null = 未选目的地） */
-const routes = ref<TravelRoute[] | null>(null);
-const routeDest = ref("");
+/**
+ * **统一的"去哪儿"计划**——右键与左键卡片共用同一份状态。
+ *
+ * 为什么合成一个（2026-09-11 用户实测反馈）：原来右键走空白位置用一套 `ctx*`、
+ * 点城镇走另一套 `routes/routeDest`，于是
+ *   ① **右键点城镇没用**（只有左键→"查看路线"→候选人肉三步才能进城）；
+ *   ② 右键选了一处之后再左键选城镇进城，**上一次的右键候选还挂在面板上**（时间还是旧的）。
+ * 两套状态本来描述的就是同一件事（"我要去某处，有这几条路可选"），合并后这两个 bug
+ * 在结构上消失，而不是靠加清理代码去补。
+ *
+ * `dest.name` 非空 = 目的地是个**地名**（城镇）→ 执行时按地名走；
+ * 否则按世界坐标走。两者在引擎侧本来就是同一条寻路管线（`_plan_routes`）。
+ */
+interface TravelPlan {
+  /** 目的地世界坐标（画标记用） */
+  x: number;
+  y: number;
+  /** 目的地地名（城镇）；空白处为空串 */
+  name: string;
+  /** 标记下方的文字（"目的地" / 城镇名） */
+  label: string;
+  /** 候选路径（null = 正在规划） */
+  routes: TravelRoute[] | null;
+  /** 规划失败的原因文案（空 = 没失败） */
+  err: string;
+}
+const plan = ref<TravelPlan | null>(null);
 const planning = ref(false);
 
-// ---------- 右键：走到指定位置（T4） ----------
-/** 右键选中的世界坐标（null = 没选）；marker 画在 svg 上 */
-const ctxPoint = ref<{ x: number; y: number } | null>(null);
-const ctxRoutes = ref<TravelRoute[] | null>(null);
-const ctxDestName = ref("");
-const ctxPlanning = ref(false);
+/** 计划对应的"当时坐标 + 缩放档位"（用于判断计划是否过期，见 `planStale`） */
+const planAt = ref<{ x: number; y: number; span: number } | null>(null);
+/** 计划是否已过期（玩家走过、或改过缩放 → 候选的里程/耗时都不再对） */
+function planStale() {
+  const p = planAt.value;
+  const self = mv.value?.self;
+  if (!p || !self) return false;
+  return self.x !== p.x || self.y !== p.y || s.mapSpan !== p.span;
+}
 
 /** 投影的逆：SVG 客户端坐标 → 世界坐标（里） */
 function unpx(ev: MouseEvent) {
@@ -57,47 +82,117 @@ function unpx(ev: MouseEvent) {
   return { x, y };
 }
 
-async function onMapContextMenu(ev: MouseEvent) {
-  ev.preventDefault();                       // 屏蔽浏览器右键菜单
-  const pt = unpx(ev);
-  if (!pt) return;
-  ctxPoint.value = pt;                       // 先落标记：无舆图也要看到点了哪里
-  ctxRoutes.value = null;
-  ctxDestName.value = "";
+/** 落点 60 里内算"脚下"（与引擎 `NEAR_MOVE_LI` 同口径）——那种情况不必给候选 */
+const NEAR_LI = 60;
+
+/**
+ * 规划去 `(x, y)`；`name` 给了就按**地名**走（城镇），否则按坐标走。
+ * 无舆图时**只落标记 + 提示**，不发请求（定案 §4.2：无舆图只能手动探路）。
+ */
+async function planTo(x: number, y: number, name = "", label = "目的地") {
+  plan.value = { x, y, name, label, routes: null, err: "" };
+  const self0 = mv.value?.self;
+  planAt.value = self0 ? { x: self0.x, y: self0.y, span: s.mapSpan } : null;
   if (!hasMap.value) {
     ui.notify("无舆图：不知路在何方，只能按方向摸索（手动探路）", "err");
     return;
   }
-  ctxPlanning.value = true;
+  const self = mv.value?.self;
+  if (self && Math.hypot(x - self.x, y - self.y) <= NEAR_LI) {
+    // 脚下：引擎走"近距挪动"，不需要候选，直接可执行
+    plan.value.routes = [];
+    plan.value.err = "";
+    return;
+  }
+  planning.value = true;
   try {
-    const r = await s.planTravelTo(pt.x, pt.y);
-    if (r?.ok) {
-      const d = r.data as { routes?: TravelRoute[]; dest?: { name?: string } };
-      ctxRoutes.value = d.routes || [];
-      ctxDestName.value = d.dest?.name ?? "";
-      if ((ctxRoutes.value?.length ?? 0) === 0) ui.notify("此处无路可通（绝壁 / 深海 / 禁制所阻）");
+    // ⚠️ 两个 store 方法的返回**形状不同**（历史原因，别改错了）：
+    //   `planTravel(name)`    → `TravelRoute[]`（只管候选，拒绝时给空数组）
+    //   `planTravelTo(x, y)`  → `Result`（要拿 reason 区分 need_map / no_path）
+    if (name) {
+      const rs = await s.planTravel(name);
+      if (!plan.value) return;
+      plan.value.routes = rs || [];
+      if (plan.value.routes.length === 0) plan.value.err = "此处无路可通（绝壁 / 深海 / 禁制所阻）";
     } else {
-      ctxRoutes.value = [];
+      const r = await s.planTravelTo(x, y);
+      if (!plan.value) return;                    // 期间被清了
+      if (r?.ok) {
+        const d = r.data as { routes?: TravelRoute[] };
+        plan.value.routes = d.routes || [];
+        if ((plan.value.routes?.length ?? 0) === 0) {
+          plan.value.err = "此处无路可通（绝壁 / 深海 / 禁制所阻）";
+        }
+      } else {
+        plan.value.routes = [];
+        plan.value.err = r?.reason === "need_map"
+          ? "无舆图：不知路在何方"
+          : "推演不出路径（换个去处试试）";
+      }
     }
   } finally {
-    ctxPlanning.value = false;
+    planning.value = false;
   }
 }
 
-async function goPoint(route: number) {
-  const p = ctxPoint.value;
+function clearPlan() {
+  plan.value = null;
+  planAt.value = null;
+}
+
+/**
+ * 右键 = **走到这里**（城镇 / 内容点 / 空白**一视同仁**）。
+ *
+ * 为什么不做"右键只能去空白、进城要点两下"：用户实测反馈那样既反直觉又多步骤。
+ * 命中的城镇/内容点会自动带出名字，走的是与卡片按钮完全相同的规划管线。
+ */
+async function onMapContextMenu(ev: MouseEvent) {
+  ev.preventDefault();                       // 屏蔽浏览器右键菜单
+  const pt = unpx(ev);
+  if (!pt) return;
+  const hit = hitTest(pt);
+  if (hit?.kind === "town") {
+    sel.value = { kind: "town", id: hit.id };
+  } else if (hit?.kind === "point") {
+    sel.value = { kind: "point", id: hit.id };
+  }
+  await planTo(pt.x, pt.y, hit?.kind === "town" ? hit.name : "", hit?.name || "目的地");
+}
+
+/** 命中测试：世界坐标附近有没有城镇/内容点（阈值按当前缩放换算成"里"） */
+function hitTest(pt: { x: number; y: number }) {
+  const tol = (HIT_PX / HALF) * R.value;     // 像素阈值 → 里
+  const towns = mv.value?.towns || [];
+  for (const t of towns) {
+    if (Math.hypot(t.x - pt.x, t.y - pt.y) <= tol) {
+      return { kind: "town" as const, id: t.id, name: t.name };
+    }
+  }
+  for (const p of mv.value?.points || []) {
+    if (Math.hypot(p.x - pt.x, p.y - pt.y) <= tol) {
+      return { kind: "point" as const, id: p.id, name: p.name_shown };
+    }
+  }
+  return null;
+}
+
+/** 执行当前计划里的第 `route` 条候选 */
+async function go(route: number) {
+  const p = plan.value;
   if (!p) return;
-  const r = await s.planTravelTo(p.x, p.y, route);
-  if (r?.ok) {
-    ctxPoint.value = null;
-    ctxRoutes.value = null;
-  }
+  const r = p.name
+    ? await s.travelRoute(p.name, route)
+    : await s.planTravelTo(p.x, p.y, route);
+  if (r?.ok) clearPlan();
 }
 
-function clearCtx() {
-  ctxPoint.value = null;
-  ctxRoutes.value = null;
-  ctxDestName.value = "";
+/** 脚下（无候选）时的直接执行 */
+async function goNear() {
+  const p = plan.value;
+  if (!p) return;
+  const r = await s.planTravelTo(p.x, p.y);
+  // 近距挪动是**单段式**：不带 route 也会真的移动（引擎里那一支在门槛之前）
+  if (r?.ok) clearPlan();
 }
 
 const DIRS = ["北", "东北", "东", "东南", "南", "西南", "西", "西北"];
@@ -112,6 +207,32 @@ const SIZE = 560;
  * （中心重合，所以只核对中心时看不出来）。两个层要叠在一起，就必须**同一套半幅**。
  * 2026-09-11 与 `tools/atlas.py` 的 y 翻转一并修正。 */
 const HALF = SIZE / 2;
+/** 命中测试的像素容差（点城镇/内容点时） */
+const HIT_PX = 12;
+/**
+ * 地图的**实际显示边长**（CSS 像素）——底图请求的 `px` 用它。
+ *
+ * 为什么要量：地图按容器铺满（`width:100%`），SVG 靠 viewBox 缩放到实际尺寸。
+ * 若底图固定按 `SIZE`(560) 渲染，在大屏上会被放大成一团糊。这里用 ResizeObserver
+ * 跟随实际尺寸，并**取整到 64 的倍数**——避免拖动窗口时每一像素都触发一次新渲染
+ * （底图是服务端渲染 + LRU 缓存，参数越稳越省）。
+ */
+const boxPx = ref(SIZE);
+const mapEl = ref<SVGSVGElement | null>(null);
+let ro: ResizeObserver | null = null;
+onMounted(() => {
+  const el = mapEl.value;
+  if (!el || typeof ResizeObserver === "undefined") return;
+  const measure = () => {
+    const w = el.getBoundingClientRect().width;
+    if (w > 0) boxPx.value = Math.max(256, Math.min(2048, Math.ceil(w / 64) * 64));
+  };
+  measure();
+  ro = new ResizeObserver(measure);
+  ro.observe(el);
+});
+onBeforeUnmount(() => { ro?.disconnect(); ro = null; });
+
 /** 视野半径（里）= 视图边长的一半。**由 store 的缩放档位驱动**（T6 缩放）。 */
 const R = computed(() => s.mapSpan / 2);
 const px = (x: number, y: number) => {
@@ -131,6 +252,9 @@ const px = (x: number, y: number) => {
  * 没走过的仍是纸上淡墨——"我亲自到过的"与"我听说过/买来的"一眼可分。
  * 探索依据在**服务端存档**里取（`WorldState.explored`），不吃前端参数
  * （否则前端可以假装走过全图把迷雾全点亮）。
+ *
+ * `px` = **实际显示边长**（`boxPx`，ResizeObserver 量）：SVG 靠 viewBox 缩放，
+ * 地图铺满容器后显示尺寸可能远超 SIZE，写死 `px=SIZE` 会在大屏上糊成一片。
  */
 const baseSrc = computed(() => {
   const m = mv.value;
@@ -138,7 +262,8 @@ const baseSrc = computed(() => {
   const center = { x: m.self.x, y: m.self.y };   // 始终以玩家为中心（跟着右键点走会让整图跳动）
   const span = Math.round(R.value * 2);
   return `/api/map/img?run_id=${encodeURIComponent(s.runId ?? "")}` +
-    `&x=${center.x.toFixed(1)}&y=${center.y.toFixed(1)}&span=${span}&px=${SIZE}&style=composed`;
+    `&x=${center.x.toFixed(1)}&y=${center.y.toFixed(1)}&span=${span}` +
+    `&px=${boxPx.value}&style=composed`;
 });
 
 const gridLines = computed(() => {
@@ -188,34 +313,16 @@ async function resetZoom() {
 
 function pickTown(t: MapTown) {
   sel.value = { kind: "town", id: t.id };
-  routes.value = null;
-  routeDest.value = "";
+  // 左键只做"看一看"，**不动 plan**——plan 只由右键或卡片上的「前往」产生。
+  // 这样"右键选了 A 再左键点 B"时，A 的候选不会被莫名其妙清掉或替换。
 }
 function pickPoint(p: MapPoint) {
   sel.value = { kind: "point", id: p.id };
-  routes.value = null;
-  routeDest.value = "";
 }
 
-/** 点目的地 → 让引擎算候选（纯查询） */
-async function plan(dest: string) {
-  if (!s.canAct) return;
-  planning.value = true;
-  try {
-    routes.value = await s.planTravel(dest);
-    routeDest.value = dest;
-    if (routes.value.length === 0) ui.notify("无路可通（或以你如今修为过不去）");
-  } finally {
-    planning.value = false;
-  }
-}
-
-async function go(dest: string, route: number) {
-  const r = await s.travelRoute(dest, route);
-  if (r?.ok) {
-    routes.value = null;
-    sel.value = null;
-  }
+/** 点卡片上的「前往」＝ 与右键同一个规划管线（不再有第二套状态） */
+async function goFromCard(x: number, y: number, name = "") {
+  await planTo(x, y, name, name || "目的地");
 }
 
 async function march(dir: string) {
@@ -226,12 +333,17 @@ async function march(dir: string) {
   }
 }
 
-async function explorePoint(p: MapPoint) {
-  // 内容点暂以旧探索点通道进入（T5 会把设施与内容点正式接上）
-  const r = await s.explore("灵脉山");
-  if (r?.ok) sel.value = null;
-  void p;
-}
+/**
+ * 移动/换视野后让目的地计划过期（否则候选与耗时留在面板上——用户实测反馈
+ * "进城之后上一次的路线还在、时间也不变"）。
+ *
+ * ⚠️ **不能用 `watch(() => state.map.self.x/y)` 来做**：`state` 在**每次动作/设置**
+ * 之后都会被整体替换（静养、买图、静默刷新都会），watcher 会**在面板刚设好就立刻触发**，
+ * 把 plan 清成 null —— 表现为"点了「前往」什么也没发生"
+ * （实测：`planTo` 确实被调用了 6 次，面板一次都没出现）。
+ * 改为在 `planTo` 里记下"当时坐标 + 缩放档位"，渲染时用 `planStale()` 判断
+ * （见脚本上方 `planAt` / `planStale`）。
+ */
 
 const kindLabel: Record<string, string> = {
   mine: "矿脉", herb: "灵草", lair: "兽巢", ruin: "遗迹",
@@ -267,7 +379,7 @@ const kindIcon: Record<string, string> = {
     <div class="wrap">
       <!-- ---------- 左：地图 ---------- -->
       <div class="mapbox">
-        <svg :viewBox="`0 0 ${SIZE} ${SIZE}`" class="map" @contextmenu="onMapContextMenu">
+        <svg ref="mapEl" :viewBox="`0 0 ${SIZE} ${SIZE}`" class="map" @contextmenu="onMapContextMenu">
           <rect x="0" y="0" :width="SIZE" :height="SIZE" class="bg" />
           <!-- P4：舆图底图（后端 pygame 渲染；浏览器只显示）——SVG 叠加层仍在它之上 -->
           <image v-if="baseSrc" :href="baseSrc" x="0" y="0" :width="SIZE" :height="SIZE"
@@ -302,22 +414,32 @@ const kindIcon: Record<string, string> = {
             <circle :cx="px(mv?.self.x || 0, mv?.self.y || 0)[0]"
                     :cy="px(mv?.self.x || 0, mv?.self.y || 0)[1]" r="6" />
           </g>
-          <!-- 右键选中的目的地（走到指定位置） -->
-          <g v-if="ctxPoint" class="ctx">
-            <circle :cx="px(ctxPoint.x, ctxPoint.y)[0]" :cy="px(ctxPoint.x, ctxPoint.y)[1]" r="7"
+          <!-- 目的地标记（右键 / 卡片「前往」都走这里） -->
+          <g v-if="plan && !planStale()" class="ctx">
+            <circle :cx="px(plan.x, plan.y)[0]" :cy="px(plan.x, plan.y)[1]" r="7"
                     class="ctx-ring" />
             <line :x1="px(mv?.self.x || 0, mv?.self.y || 0)[0]"
                   :y1="px(mv?.self.x || 0, mv?.self.y || 0)[1]"
-                  :x2="px(ctxPoint.x, ctxPoint.y)[0]" :y2="px(ctxPoint.x, ctxPoint.y)[1]"
+                  :x2="px(plan.x, plan.y)[0]" :y2="px(plan.x, plan.y)[1]"
                   class="ctx-line" />
-            <text :x="px(ctxPoint.x, ctxPoint.y)[0]" :y="px(ctxPoint.x, ctxPoint.y)[1] - 10"
-                  class="ctx-label">目的地</text>
+            <text :x="px(plan.x, plan.y)[0]" :y="px(plan.x, plan.y)[1] - 10"
+                  class="ctx-label">{{ plan.name || "目的地" }}</text>
           </g>
           <!-- 方位字 -->
           <text :x="SIZE / 2" :y="16" class="dir">北</text>
           <text :x="SIZE / 2" :y="SIZE - 6" class="dir">南</text>
           <text :x="10" :y="SIZE / 2" class="dir">西</text>
           <text :x="SIZE - 18" :y="SIZE / 2" class="dir">东</text>
+          <!-- 无舆图：画布是空的，得说清为什么空（否则看着像坏了） -->
+          <g v-if="!hasMap" class="nomap">
+            <text :x="SIZE / 2" :y="SIZE / 2 - 14" class="nomap-t">无舆图</text>
+            <text :x="SIZE / 2" :y="SIZE / 2 + 12" class="nomap-s">
+              山川形势一概不知 —— 只知身在【{{ curName || "野外" }}】
+            </text>
+            <text :x="SIZE / 2" :y="SIZE / 2 + 34" class="nomap-s">
+              只能按方向摸索着走（下方八方向），或去坊市买一份舆图
+            </text>
+          </g>
         </svg>
 
         <!-- 无舆图：八方向手动探路 -->
@@ -329,24 +451,30 @@ const kindIcon: Record<string, string> = {
           </div>
         </div>
 
-        <!-- 右键目的地：候选路径（与城镇同一个引擎管线） -->
-        <div v-if="ctxPoint" class="ctxpanel">
+        <!-- 目的地候选：右键 / 卡片「前往」共用同一份 plan（与城镇同一个引擎管线）。
+             `!planStale()` 保证走完之后旧的候选**不会**留在面板上（里程/耗时都会失真）。 -->
+        <div v-if="plan && !planStale()" class="ctxpanel">
           <div class="ctxhd">
             <span class="dim" style="font-size: 12px">
-              右键目的地（{{ Math.round(ctxPoint.x).toLocaleString() }},
-              {{ Math.round(ctxPoint.y).toLocaleString() }}）
-              <template v-if="ctxDestName"> · 近【{{ ctxDestName }}】</template>
+              <template v-if="plan.name">【{{ plan.name }}】</template>
+              <template v-else>走到（{{ Math.round(plan.x).toLocaleString() }},
+                {{ Math.round(plan.y).toLocaleString() }}）</template>
             </span>
-            <button class="btn mini" @click="clearCtx">取消</button>
+            <button class="btn mini" @click="clearPlan">取消</button>
           </div>
-          <div v-if="ctxPlanning" class="dim" style="font-size: 12px">推演路径…</div>
-          <div v-else-if="hasMap && (ctxRoutes?.length ?? 0) === 0" class="dim" style="font-size: 12px">
-            此处无路可通（绝壁 / 深海 / 禁制所阻），或已在你脚下。
+          <div v-if="planning" class="dim plan-busy" style="font-size: 12px">推演路径…</div>
+          <div v-else-if="plan.err" class="dim plan-err" style="font-size: 12px">{{ plan.err }}</div>
+          <!-- 脚下：近距挪动，没有候选，直接给一个动作 -->
+          <div v-else-if="plan.routes && plan.routes.length === 0" class="routes plan-near">
+            <button class="route" :disabled="!s.canAct" @click="goNear">
+              <span class="rlabel">近处挪动</span>
+              <span class="rdays">≤ 60 里</span>
+              <span class="rmeta mono">同一聚落内，不寻路</span>
+            </button>
           </div>
-          <div v-else-if="ctxRoutes" class="routes">
-            <div class="dim" style="font-size: 12px">选一条路走：</div>
-            <button v-for="r in ctxRoutes" :key="'c' + r.idx" class="route" :disabled="!s.canAct"
-                    @click="goPoint(r.idx)">
+          <div v-else-if="plan.routes" class="routes">
+            <button v-for="r in plan.routes" :key="'p' + r.idx" class="route" :disabled="!s.canAct"
+                    @click="go(r.idx)">
               <span class="rlabel">{{ r.label }}</span>
               <span class="rdays">{{ r.days }} 日</span>
               <span class="rmeta mono">
@@ -366,9 +494,8 @@ const kindIcon: Record<string, string> = {
             你手中无舆图，山川形势一概不知。只能按方向摸索着走——走到哪里算哪里。
           </template>
           <template v-else>
-            点击地图上的<span class="k tw-dot">圆点</span>（城镇）或
-            <span class="k pt-dot">小点</span>（内容点）查看详情并前往；
-            <b>右键任意位置</b>＝直接走到那里。
+            <b>右键任意位置</b>＝直接走到那里（城镇 / 灵草 / 空地一视同仁）；
+            左键点<span class="k tw-dot">圆点</span>或<span class="k pt-dot">小点</span>只看详情。
             <template v-if="!detailed">（粗舆图只标城镇；换详图可看到灵草/矿脉/兽巢等）</template>
           </template>
         </p>
@@ -388,22 +515,8 @@ const kindIcon: Record<string, string> = {
 
           <div class="ops" v-if="!selTown.here">
             <button class="btn mini primary" :disabled="!s.canAct || planning"
-                    @click="plan(selTown.name)">
-              {{ planning ? "推演路径…" : "查看路线" }}
-            </button>
-          </div>
-
-          <div v-if="routes && routeDest === selTown.name" class="routes">
-            <div class="dim" style="font-size: 12px">选一条路走：</div>
-            <button v-for="r in routes" :key="r.idx" class="route" :disabled="!s.canAct"
-                    @click="go(selTown.name, r.idx)">
-              <span class="rlabel">{{ r.label }}</span>
-              <span class="rdays">{{ r.days }} 日</span>
-              <span class="rmeta mono">
-                {{ Math.round(r.li).toLocaleString() }} 里 ｜
-                路网 {{ Math.round(r.road_share * 100) }}% ｜
-                险地 {{ Math.round(r.danger_share * 100) }}%
-              </span>
+                    @click="goFromCard(selTown.x, selTown.y, selTown.name)">
+              前往
             </button>
           </div>
         </div>
@@ -422,9 +535,11 @@ const kindIcon: Record<string, string> = {
           <p v-if="!selPoint.known" class="dim" style="font-size: 12px; margin: 4px 0 0">
             只知此处"有这么一处"，究竟是何物，须亲身去看（或买情报）。
           </p>
-          <div class="ops" v-if="selPoint.known">
-            <button class="btn mini primary" :disabled="!s.canAct" @click="explorePoint(selPoint)">
-              前往探索
+          <div class="ops">
+            <!-- 走到那儿（探索玩法本身归 T5；这里先把"去"接通） -->
+            <button class="btn mini primary" :disabled="!s.canAct || planning"
+                    @click="goFromCard(selPoint.x, selPoint.y)">
+              前往此处
             </button>
           </div>
         </div>
@@ -437,12 +552,6 @@ const kindIcon: Record<string, string> = {
             ｜ 共 {{ mv?.counts.towns }} 镇 / {{ mv?.counts.points }} 处（已知 {{ mv?.counts.known_points }}）
           </div>
           <div v-else>共 {{ mv?.counts.towns }} 镇</div>
-          <!-- 两层迷雾（定案 §5）：底图由后端按 explored 合成，这里只做说明 -->
-          <div>
-            <span class="k fog-atlas"></span> 舆图（听说/买来）
-            <span class="k fog-real"></span> 实景（亲自走过）
-            <template v-if="exploredCells > 0"> ｜ 已踏勘 {{ exploredCells }} 格</template>
-          </div>
         </div>
       </div>
     </div>
@@ -452,8 +561,12 @@ const kindIcon: Record<string, string> = {
 <style scoped>
 .wrap { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(260px, 340px); gap: 12px; }
 @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
-.mapbox { display: flex; flex-direction: column; gap: 8px; }
-.map { width: 100%; max-width: 560px; aspect-ratio: 1 / 1; background: var(--panel3); border: 1px solid var(--line); border-radius: 8px; }
+.mapbox { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* 地图按容器铺满（原来是 max-width:560px —— 宽屏右侧一大片空着，用户实测反馈）。
+   `aspect-ratio: 1/1` 保持正方形；上限 1200px 是防"超大屏把地图吹成一堵墙"。
+   ⚠️ SVG 用 viewBox 缩放，故**像素密度要跟着走**：底图请求的 `px` 由 ResizeObserver
+   量出的实际显示尺寸决定（见 `baseSrc`），否则在大屏上会糊。 */
+.map { width: 100%; max-width: 1200px; aspect-ratio: 1 / 1; background: var(--panel3); border: 1px solid var(--line); border-radius: 8px; }
 .bg { fill: var(--panel3); }
 /* 底图不吃鼠标事件，交互继续由上面的 SVG 图层负责（点选/悬停/右键） */
 .basemap { pointer-events: none; }
@@ -479,6 +592,10 @@ const kindIcon: Record<string, string> = {
   border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 .ctxhd { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .dir { fill: var(--ink-dim); font-size: 12px; text-anchor: middle; opacity: .7; }
+/* 无舆图的空白画布提示（不然玩家只看到一片空，不知道是"没图"还是"坏了"） */
+.nomap text { text-anchor: middle; }
+.nomap-t { fill: var(--ink-dim); font-size: 22px; letter-spacing: 4px; opacity: .85; }
+.nomap-s { fill: var(--ink-dim); font-size: 12px; opacity: .6; }
 .march { display: flex; flex-direction: column; gap: 6px; }
 .dirs { display: flex; flex-wrap: wrap; gap: 5px; }
 .side { display: flex; flex-direction: column; gap: 9px; min-width: 0; }

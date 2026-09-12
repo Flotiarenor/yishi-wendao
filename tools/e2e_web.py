@@ -37,6 +37,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -274,18 +275,18 @@ def main(argv=None):
                     EC.presence_of_element_located((By.CSS_SELECTOR, ".side .card")))
                 check("真浏览器点击城镇 → 侧栏出卡片", True, "")
                 plan = driver.find_elements(
-                    By.XPATH, "//*[contains(@class,'side')]//button[contains(., '查看路线')]")
+                    By.XPATH, "//*[contains(@class,'side')]//button[contains(., '前往')]")
                 if plan:
                     # 点一次往往不够：planning 请求在冷启动下要几秒，而候选是**后渲染**的
                     # （与 jsdom 侧同一个坑：点完立刻查选择器会查空）。故"点到生效"。
                     ok = False
                     deadline = time.time() + 90
                     while time.time() < deadline and not ok:
-                        if driver.find_elements(By.CSS_SELECTOR, ".routes .route"):
+                        if driver.find_elements(By.CSS_SELECTOR, ".ctxpanel .route"):
                             ok = True
                             break
                         btns = driver.find_elements(
-                            By.XPATH, "//*[contains(@class,'side')]//button[contains(., '查看路线')]")
+                            By.XPATH, "//*[contains(@class,'side')]//button[contains(., '前往')]")
                         if btns:
                             try:
                                 if btns[0].is_enabled():
@@ -293,14 +294,63 @@ def main(argv=None):
                             except Exception:
                                 pass
                         time.sleep(0.4)
-                    check("点「查看路线」→ 候选出现（真实耗时）", ok,
+                    check("点「前往」→ 候选出现（真实耗时）", ok,
                           driver.find_element(By.CSS_SELECTOR, ".side").text[:60].replace("\n", " "))
             except Exception as e:      # noqa: BLE001
                 check("真浏览器点击城镇 → 侧栏出卡片", False, repr(e))
 
+        # ---- 缩放：**底图必须真的换一张** ----
+        # 只查"城镇点变多"是不够的：用户实测反馈"地图不支持缩放"，而那种情况恰恰是
+        # 头部数字变了、`<image>` 的 href 却没变（图上什么也没发生）。故这里**量 href**：
+        #   span 必须跟着档位走，且换 span 后**底图的像素必须不同**。
+        def _href():
+            els = driver.find_elements(By.CSS_SELECTOR, "svg.map image.basemap")
+            return els[0].get_attribute("href") if els else ""
+
+        h0 = _href()
+        span0 = re.search(r"[?&]span=(\d+)", h0 or "")
+        zout = driver.find_elements(By.XPATH, "//*[contains(@class,'zoom')]//button[contains(., '－')]")
+        if zout and span0:
+            for _ in range(2):                      # 8000 → 20000（连点两次）
+                try:
+                    zout[0].click()
+                except Exception:
+                    pass
+                time.sleep(1.2)
+            # 等 href 真的变（底图 URL 是 computed，状态回来才重建）
+            h1 = h0
+            deadline = time.time() + 40
+            while time.time() < deadline and h1 == h0:
+                h1 = _href()
+                time.sleep(0.4)
+            span1 = re.search(r"[?&]span=(\d+)", h1 or "")
+            check("缩放后底图 URL 的 span 变了", bool(h1) and h1 != h0 and bool(span1)
+                  and span1.group(1) != span0.group(1),
+                  f"span {span0.group(1) if span0 else '?'} → {span1.group(1) if span1 else '?'}")
+            if h1 and h1 != h0:
+                b0 = urllib.request.urlopen(f"http://127.0.0.1:{port}{h0}", timeout=120).read()
+                b1 = urllib.request.urlopen(f"http://127.0.0.1:{port}{h1}", timeout=120).read()
+                check("缩放后底图**内容**确实不同（不是同一张图）", b0 != b1,
+                      f"{len(b0)} vs {len(b1)} bytes")
+                # 顺手量一下"探索边界"在真实浏览器里到底占多少像素：
+                # 这是用户反馈"没展示实景"的定量判据（只画几格时它确实小得看不见）。
+                href_atlas = h1.replace("style=composed", "style=atlas")
+                b_atlas = urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}{href_atlas}", timeout=120).read()
+                check("底图走的是 composed（含探索边界）", "style=composed" in (h1 or ""),
+                      (h1 or "")[:80])
+                with open(os.path.join(ROOT, "logs", "e2e_web_basemap.png"), "wb") as fh:
+                    fh.write(b1)
+                with open(os.path.join(ROOT, "logs", "e2e_web_basemap_atlas.png"), "wb") as fh:
+                    fh.write(b_atlas)
+        else:
+            check("缩放后底图 URL 的 span 变了", False,
+                  f"zoom 按钮={bool(zout)} span={bool(span0)}")
+
         os.makedirs(os.path.dirname(a.out), exist_ok=True)
         driver.save_screenshot(a.out)
         print("  截图 → %s（%.0f KB）" % (a.out, os.path.getsize(a.out) / 1024))
+        print("  底图 → logs/e2e_web_basemap.png（另出 *_atlas.png 供对比）")
 
         if a.keep_open:
             print("== --keep-open：浏览器保持打开，按 Ctrl+C 结束 ==")

@@ -348,86 +348,163 @@ try {
     dot.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
     // 同理：等卡片真的渲染出来（而不是睡 400ms 赌它出来了）
     await waitFor(() => !!document.querySelector(".side .card"), 8000);
-    // 等"查看路线"按钮出现（卡片渲染与 `s.canAct` 都可能晚一拍），再点。
-    let planBtn = byText(".side button", "查看路线") || byText(".side button", "推演");
-    if (!planBtn) {
-      await waitFor(() => !!(byText(".side button", "查看路线") || byText(".side button", "推演")), 15000);
-      planBtn = byText(".side button", "查看路线") || byText(".side button", "推演");
-    }
-    if (planBtn) {
-      routeShown = await clickUntil(
-        () => byText(".side button", "查看路线") || byText(".side button", "推演"),
-        () => !!document.querySelector(".routes .route"),
-        45000,
-      );
-      const r0 = document.querySelector(".routes .route");
-      routeDays = r0 ? (r0.textContent || "").trim() : "";
-      if (!routeShown) {
-        // 失败时把卡片/提示原文带出来，便于定位（而不是只报一句 false）
-        const card = document.querySelector(".side");
-        routeDays = "（未出候选）侧栏原文：" + (card ? (card.textContent || "").trim() : "（空）");
-      }
-    } else {
-      const card = document.querySelector(".side .card");
-      routeDays = "选中项：" + (card ? (card.textContent || "").trim() : "（无卡片）");
+    // 交互统一后：卡片上只有「前往」（原来"查看路线"那一步已并入右键）。
+    // ⚠️ 必须**重试到生效**：冷启动期间 `s.canAct` 为假，按钮 disabled —— jsdom 的点击
+    // 会被直接丢掉（这正是 `clickUntil` 存在的理由，别退回"点一次就断言"）。
+    routeShown = await clickUntil(
+      () => {
+        const b = byText(".side button", "前往");
+        return b && !b.disabled ? b : null;
+      },
+      () => !!document.querySelector(".ctxpanel .route"),
+      45000,
+    );
+    const r0 = document.querySelector(".ctxpanel .route");
+    routeDays = r0 ? (r0.textContent || "").trim() : "";
+    if (!routeShown) {
+      // 失败时把面板/卡片原文带出来，便于定位（而不是只报一句 false）
+      const box = document.querySelector(".ctxpanel") || document.querySelector(".side");
+      routeDays = "（未出候选）原文：" + (box ? (box.textContent || "").trim() : "（空）");
     }
   } else {
     routeDays = "（地图上没找到「非脚下」的城镇点）";
   }
-  check("6b 点城镇 → 给出候选路径", routeShown);
-  check("6b 候选显示真实耗时（日 + 里程，非写死 3 日）",
-    /日/.test(routeDays) && /里/.test(routeDays) && !routeDays.includes("3 日"),
+  check("6b 点城镇 → 卡片有「前往」→ 出候选路径", routeShown);
+  // ⚠️ 判据要**解析出天数**再比，不能 `!routeDays.includes("3 日")`——那是子串匹配，
+  // "34.3 日"/"13.2 日" 里都含 "3 日"，会把真实耗时误判成"写死 3 日"（实测踩过）。
+  const daysM = routeDays.match(/([\d.]+)\s*日/);
+  const liM = routeDays.match(/([\d,]+)\s*里/);
+  check("6b 候选显示真实耗时（日 + 里程，且**不是**写死的 3 日）",
+    !!daysM && !!liM && parseFloat(daysM[1]) !== 3,
     routeDays.replace(/\s+/g, " ").slice(0, 70));
 
-  // 6c) 缩放（T6）：档位制；缩小后**可点击的城镇必须变多**——
-  //     否则底图上有镇、却不可点（图上与交互对不上，这是缩放最容易踩的坑）。
+  // 6b2) **右键点城镇也能出候选**（用户实测反馈：原来右键只对空白处有效，
+  //      进城必须"左键→查看路线→选候选"三步）。右键后能出候选才算通过。
+  {
+    const svg = document.querySelector("svg.map");
+    // jsdom 的 rect 恒为 0 → 打一个与 viewBox 等比的假 rect，让 `unpx` 能反解。
+    // `unpx` 按 clientX/rect 换算，故这里正着算一遍 client 坐标。
+    svg.getBoundingClientRect = () => ({
+      left: 0, top: 0, width: 560, height: 560, right: 560, bottom: 560, x: 0, y: 0,
+      toJSON() {},
+    });
+    // 找**另一个**城镇（6b 已经选过一个了；`.sel` 那个会命中同一点，测不出新路径）
+    const d2 = document.querySelector("svg.map .towns .tw:not(.here):not(.sel)");
+    if (d2) {
+      const cx = parseFloat(d2.getAttribute("cx") || "280");
+      const cy = parseFloat(d2.getAttribute("cy") || "280");
+      svg.dispatchEvent(new dom.window.MouseEvent("contextmenu", {
+        bubbles: true, cancelable: true, clientX: cx, clientY: cy,
+      }));
+      const ok = await waitResult(() => !!document.querySelector(".ctxpanel .route"), 45000);
+      const nm = textOf(".ctxpanel .ctxhd");
+      check("6b2 右键点城镇直接出候选（不必先左键再点按钮）", ok,
+        (nm || "（无目的地标题）").replace(/\s+/g, " ").slice(0, 40));
+    } else {
+      check("6b2 右键点城镇直接出候选（不必先左键再点按钮）", false, "没有可点的城镇");
+    }
+  }
+
+  // 6b3) 移动后旧的候选必须被清掉（用户实测：进城后上一次的路线还在、时间不变）
+  if (routeShown) {
+    const hadPlan = !!document.querySelector(".ctxpanel");
+    const goBtn = document.querySelector(".ctxpanel .route");
+    if (goBtn && !goBtn.disabled) {
+      click(goBtn);
+      // 走完 → 位置变了 → 面板应消失
+      const cleared = await waitResult(() => !document.querySelector(".ctxpanel"), 40000);
+      check("6b3 出发后目的地面板被清掉（不留陈旧路线）", !hadPlan || cleared,
+        `出发前面板=${hadPlan} 出发后=${!!document.querySelector(".ctxpanel")}`);
+    }
+  }
+  // 6c) 缩放（T6）：真正的判据在 `tools/e2e_web.py`（量 `<image>` 的 href 与像素）。
+  //     jsdom 这边只做**不依赖位置**的判据：按钮有界（缩到最远即禁用）、复位能回来。
+  //     ⚠️ 别在这里比"城镇点变多"：段落顺序一改（人走过了）就不可比——实测踩过。
   const zoomOutBtn = byText(".zoom button", "－");
   const zoomInBtn = byText(".zoom button", "＋");
   check("6c 地图有缩放按钮（＋/－）", !!zoomOutBtn && !!zoomInBtn);
   if (zoomOutBtn && zoomInBtn) {
-    const before = document.querySelectorAll("svg.map .towns .tw").length;
     const nearbyBefore = textOf(".map-nearby");
-    // 连点两次"缩小"（8000 → 20000 里），等城镇点真的变多
-    const zoomed = await clickUntil(
-      () => {
-        const b = byText(".zoom button", "－");
-        return b && !b.disabled ? b : null;
-      },
-      () => document.querySelectorAll("svg.map .towns .tw").length > before,
+    let prev = textOf(".map-nearby");
+    const steps = [];
+    for (let i = 0; i < 5; i++) {
+      const b = byText(".zoom button", "－");
+      if (!b || b.disabled) { steps.push("到位"); break; }
+      click(b);
+      const moved = await waitFor(() => textOf(".map-nearby") !== prev, 15000);
+      steps.push(`${prev}→${textOf(".map-nearby")}`);
+      prev = textOf(".map-nearby");
+      if (!moved) break;
+    }
+    check("6c 缩小让「周边」里数变大", steps.length > 0 && prev !== nearbyBefore,
+      steps.join(" ; "));
+    check("6c 缩到最远后「缩小」按钮禁用（档位有界）",
+      !!byText(".zoom button", "－")?.disabled,
+      `disabled=${byText(".zoom button", "－")?.disabled}`);
+    const back = await clickUntil(
+      () => byText(".zoom button", "复位"),
+      () => !byText(".zoom button", "复位"),
       20000,
     );
-    const after = document.querySelectorAll("svg.map .towns .tw").length;
-    check("6c 缩小后城镇点变多（下发半径随视图走）", zoomed && after > before,
-      `城镇点 ${before} → ${after}`);
-    check("6c 顶部「周边」里数随之变化",
-      !!nearbyBefore && textOf(".map-nearby") !== nearbyBefore,
-      `${nearbyBefore} → ${textOf(".map-nearby")}`);
-    // 复位：回到默认视野
-    const resetBtn = byText(".zoom button", "复位");
-    if (resetBtn) {
-      const back = await clickUntil(
-        () => byText(".zoom button", "复位"),
-        () => document.querySelectorAll("svg.map .towns .tw").length <= before,
-        20000,
-      );
-      check("6c 「复位」回到默认视野", back,
-        `城镇点 ${document.querySelectorAll("svg.map .towns .tw").length}（原 ${before}）`);
-    } else {
-      check("6c 缩放后可「复位」", false, "没找到复位按钮");
-    }
+    check("6c 「复位」回到默认视野", back, `周边 ${textOf(".map-nearby")}`);
   }
-
   // 6d) 执行候选 → 位置/日志随之变化（时间轴按真实路径推进）
-  if (routeShown && !battle) {
-    const goBtn = document.querySelector(".routes .route");
-    if (goBtn && !goBtn.disabled) {
-      click(goBtn);
-      explored = await waitFor(() => document.querySelectorAll(".log-line").length > logBefore, 30000)
-        || await waitFor(() => !document.querySelector(".side .card"), 8000);
+  //
+  // ⚠️ 这里必须**自己重新规划一次**：6b/6b2 规划过，但 6c 改了缩放档位
+  // → 计划被判过期（`planStale`）、面板收起。所以先右键一处拿到候选，再走。
+  if (!battle) {
+    const svg = document.querySelector("svg.map");
+    svg.getBoundingClientRect = () => ({
+      left: 0, top: 0, width: 560, height: 560, right: 560, bottom: 560, x: 0, y: 0,
+      toJSON() {},
+    });
+    const d3 = document.querySelector("svg.map .towns .tw:not(.here)");
+    if (d3) {
+      const t0 = Date.now();
+      // 记录右键前的位置（用来判断"计划是否被判过期"）
+      const beforeNearby = textOf(".map-nearby");
+      svg.dispatchEvent(new dom.window.MouseEvent("contextmenu", {
+        bubbles: true, cancelable: true,
+        clientX: parseFloat(d3.getAttribute("cx")),
+        clientY: parseFloat(d3.getAttribute("cy")),
+      }));
+      // ⚠️ 两步等：**先等它出现**（`planTo` 里 `planning=true` 之前有个 await，
+      // 同步派发完事件后立刻查是查不到的——实测 0.0s 就"完成"了），再等它消失。
+      // 只等"消失"或用 `.routes` 容器当判据都是错的。
+      await waitFor(() => !!document.querySelector(".plan-busy"), 20000);
+      const done = await waitFor(() => !document.querySelector(".plan-busy"), 90000);
+      console.log(`    [6d] 规划耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s 完成=${done}`
+        + ` 候选=${document.querySelectorAll(".ctxpanel .route").length}`
+        + ` 周边 ${beforeNearby}→${textOf(".map-nearby")}`);
+    }
+    const goBtn = document.querySelector(".ctxpanel .route");
+    const dbgBtn = goBtn ? `disabled=${goBtn.disabled}` : "无按钮";
+    if (goBtn) {
+      const logsBefore = document.querySelectorAll(".log-line").length;
+      // ⚠️ 必须"点到生效"：右键刚规划完，`s.busy` 可能还是 true，此时候选按钮是
+      // disabled 的，点一次会被**直接丢掉**（与冷启动期间点按钮同一个坑）。
+      explored = await clickUntil(
+        () => {
+          const b = document.querySelector(".ctxpanel .route");
+          return b && !b.disabled ? b : null;
+        },
+        () => document.querySelectorAll(".log-line").length > logsBefore
+          || !document.querySelector(".ctxpanel")
+          || !!byText("h2", "战斗"),
+        45000,
+      ) || explored;
       battle = await waitFor(() => !!byText("h2", "战斗"), 3000);
     }
+    if (!explored) {
+      console.log(`    [6d 诊断] 按钮=${dbgBtn} 日志=${document.querySelectorAll(".log-line").length}`
+        + ` busy=${!!document.querySelector(".plan-busy")}`
+        + ` err=${!!document.querySelector(".plan-err")}`
+        + ` 面板=${!!document.querySelector(".ctxpanel")}`
+        + ` 面板文="${(document.querySelector(".ctxpanel")?.textContent || "").replace(/\s+/g, " ").slice(0, 60)}"`);
+    }
   }
-  check("6 移动/探索产生叙事文字（进入下方日志）", explored, `日志行 ${logBefore} → ${document.querySelectorAll(".log-line").length}`);
+  check("6 移动/探索产生叙事文字（进入下方日志）", explored,
+    `日志行 ${logBefore} → ${document.querySelectorAll(".log-line").length}`);
   const mainNow = textOf(".main-slot");
   check(
     "6 战斗接管主内容区（不是覆盖层）",
