@@ -91,15 +91,16 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
 
 | 项 | 当前值 |
 |---|---|
-| 测试基线 | `.venv\Scripts\python.exe -X utf8 main.py test` → **809 项全过 / 0 败**（14 个单测文件、逐文件实跑相加）+ 冒烟 20 局 |
+| 测试基线 | `.venv\Scripts\python.exe -X utf8 main.py test` → **829 项全过 / 0 败**（14 个单测文件、逐文件实跑相加）+ 冒烟 20 局 |
 | 前端 E2E | `cd frontend ; npm run e2e` → **31 项全过**（含地图 6a/6b：SVG 世界地图 + 候选真实耗时） |
 | smoke 指纹 | **18 通关 / 2 道陨 ｜ 410 场（308 胜 / 0 负 / 102 逃）｜ 均终档 23.8**（T4-A 迷雾**与基线逐位一致**——发现逻辑不消耗随机流、不改时间轴） |
 | 世界指纹 | `seed 20260910` → `terrain_checksum = abd67c38e9e86b8f`（T4-A **未改动**：只加发现写入，不碰地形/路网/内容点）；河 75 / 镇 206 / 路网 205 段 / 内容点 1517 |
-| 地图朝向 | **北在上**（定案 §3.1「原点在西南角」= y 越大越靠北）。舆图底图 `tools/atlas.py`、实景底图 `tools/maprender.py`、`tools/mapview.py` 预览、前端 `MapScreen.vue` **四处必须同一朝向**；2026-09-11 修掉了前两处与 mapview 把 y 当屏幕轴的 bug（底图与前端的可点击城镇点**上下镜像**，实测最大偏 305 px ≈ 9 600 里，表现是"点下去的地方和图上不一样、城镇点跑到湖里"）。回归用例：`tests/test_map_render.py`（17 项） |
-| 地图底图渲染 | **由后端渲染**：`present/mapimg.py`（pygame 每线程 init + LRU 缓存 + 复用会话世界）→ `GET /api/map/img`（种子取自存档，**不入前端参数**）；前端 MapScreen 只放 `<image>` 层。两种风格：`tools/atlas.py` 舆图风（游戏内用）/ `tools/maprender.py` 实景风（离线出图） |
-| 底图耗时 | 舆图渲染 **0.10~0.37 s** + PNG 编码 **0.07 s**；**首次取图 13.4 s → 0.74 s**（复用世界后）；换视野 0.16 s；同参命中缓存 0.026 s（`WORLD_CACHE_SIZE=4`）。**长尾来自建世界，不是渲染** |
-| 真浏览器冒烟 | `tools/e2e_web.py`（Selenium + 无头 Edge **152.0.4191.66，与分发的 WebView2 同版本**）→ **17 项全过 / 0 败**（2026-09-11 续复核）；补 jsdom 的两个原理性盲区：**底图是否真画出来**（canvas 读像素断言"非纯色 + 纸底 + 墨 + 水蓝"）、**CJK 是否真能显示**（量渲染宽度）。基线 **`tests/baselines/map_baseline.json`（入库，跟着代码走）**（sha256 `edf302f3101311db` + 像素统计 paper 0.8065 / ink 0.1156 / water 0.0766，**改地图就会变红**，`--update-baseline` 重记） |
-| 内容点发现 | **T4-A 已接玩法**：落地（`travel` 两处 / `march` / `explore`）即写 `WorldState.discovered`，叙事+`data.newly_discovered[]`；初始化（`discover_here`）站在出生城旁 → 最近的驿站 14 里内即被记入舆图 |
+| 地图朝向 | **北在上**（定案 §3.1「原点在西南角」= y 越大越靠北）。舆图底图 `tools/atlas.py`、实景底图 `tools/maprender.py`、`tools/mapview.py` 预览、前端 `MapScreen.vue` **四处必须同一朝向**；2026-09-11 修掉了前两处与 mapview 把 y 当屏幕轴的 bug（底图与前端的可点击城镇点**上下镜像**，实测最大偏 305 px ≈ 9 600 里，表现是"点下去的地方和图上不一样、城镇点跑到湖里"）。回归用例：`tests/test_map_render.py`（22 项） |
+| 探索边界（两层迷雾） | **已接玩法**：`WorldState.explored` = 玩家**真的站过的格**（`discover_here()` 与开局出生格写入），底图 `style=composed` 把这些格**换成实景风**、别处仍是舆图上淡墨——"我亲自到过的"与"我听说/买来的"一眼可分（定案 §5）。⚠️ **买情报只写 `discovered`、绝不写 `explored`**（听说 ≠ 去过，否则买一份情报就点亮一片实景）；探索依据在**服务端存档**取，前端参数改不动。存档 world 键 **7 个**（`explored` 存格坐标 `[cx, cy]`，非位图） |
+| 地图底图渲染 | **由后端渲染**：`present/mapimg.py`（pygame 每线程 init + LRU 缓存 + 复用会话世界）→ `GET /api/map/img`（种子取自存档，**不入前端参数**）；前端 MapScreen 只放 `<image>` 层。风格：`composed`（默认：舆图底 + 踏勘区实景）/ `atlas`（纯舆图）/ `real`（纯实景）。渲染器：`tools/atlas.py` 舆图风 / `tools/maprender.py` 实景风 |
+| 底图耗时 | 舆图渲染 **0.10~0.37 s** + PNG 编码 **0.07 s**；`composed`（含实景底图，只建一次）**0.12 s**；**首次取图 13.4 s → 0.74 s**（复用世界后）；换视野 0.16 s；同参命中缓存 0.026 s（`WORLD_CACHE_SIZE=4`）。**长尾来自建世界，不是渲染** |
+| 真浏览器冒烟 | `tools/e2e_web.py`（Selenium + 无头 Edge **152.0.4191.66，与分发的 WebView2 同版本**）→ **17 项全过 / 0 败**（2026-09-11 续复核）；补 jsdom 的两个原理性盲区：**底图是否真画出来**（canvas 读像素断言"非纯色 + 纸底 + 墨 + 水蓝"）、**CJK 是否真能显示**（量渲染宽度）。基线 **`tests/baselines/map_baseline.json`（入库，跟着代码走）**（sha256 `8d827fc02cbaa268` + 像素统计，**改地图就会变红**，`--update-baseline` 重记） |
+| 内容点发现 | **T4-A 已接玩法**：落地（`travel` 两处 / `march` / `explore`）即写 `WorldState.discovered` 与 `explored`，叙事+`data.newly_discovered[]`；开局只记**出生格**（`discover_here()` 要建世界 ≈6 s，**开局不许调**——首访世界仍推后到第一次真正需要时） |
 | 情报买卖 | **T4-B 已接玩法**：`content/intel.py` 货单——粗舆图 300 / 详图 2000（改 `map_level`）、当地情报 600（600 里内的内容点一次入舆图）；坊市面板有「情报」货段；**同一处情报只能买一次**（不重复收费） |
 | 地图右键 | 右键任意位置 = 走过去（引擎 `travel` 支持 `x`/`y` 世界坐标，与地名共用寻路管线；**无舆图仍被拒 `need_map`**，脚下 60 里内走"近距挪动"） |
 | 内容点分布 | 城镇 400 里内 29%（**出生城 400 里内 13 个**，改前 3 个）；到最近城镇中位 777 里 |
