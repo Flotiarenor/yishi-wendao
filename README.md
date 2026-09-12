@@ -91,10 +91,14 @@ Web 界面布局（P3.7）：**左=状态常驻**（含地图/修炼/坊市/书�
 
 | 项 | 当前值 |
 |---|---|
-| 测试基线 | `.venv\Scripts\python.exe -X utf8 main.py test` → **785 项全过 / 0 败**（13 个单测文件 + 冒烟 20 局） |
+| 测试基线 | `.venv\Scripts\python.exe -X utf8 main.py test` → **809 项全过 / 0 败**（14 个单测文件、逐文件实跑相加）+ 冒烟 20 局 |
 | 前端 E2E | `cd frontend ; npm run e2e` → **31 项全过**（含地图 6a/6b：SVG 世界地图 + 候选真实耗时） |
 | smoke 指纹 | **18 通关 / 2 道陨 ｜ 410 场（308 胜 / 0 负 / 102 逃）｜ 均终档 23.8**（T4-A 迷雾**与基线逐位一致**——发现逻辑不消耗随机流、不改时间轴） |
 | 世界指纹 | `seed 20260910` → `terrain_checksum = abd67c38e9e86b8f`（T4-A **未改动**：只加发现写入，不碰地形/路网/内容点）；河 75 / 镇 206 / 路网 205 段 / 内容点 1517 |
+| 地图朝向 | **北在上**（定案 §3.1「原点在西南角」= y 越大越靠北）。舆图底图 `tools/atlas.py`、实景底图 `tools/maprender.py`、`tools/mapview.py` 预览、前端 `MapScreen.vue` **四处必须同一朝向**；2026-09-11 修掉了前两处与 mapview 把 y 当屏幕轴的 bug（底图与前端的可点击城镇点**上下镜像**，实测最大偏 305 px ≈ 9 600 里，表现是"点下去的地方和图上不一样、城镇点跑到湖里"）。回归用例：`tests/test_map_render.py`（17 项） |
+| 地图底图渲染 | **由后端渲染**：`present/mapimg.py`（pygame 每线程 init + LRU 缓存 + 复用会话世界）→ `GET /api/map/img`（种子取自存档，**不入前端参数**）；前端 MapScreen 只放 `<image>` 层。两种风格：`tools/atlas.py` 舆图风（游戏内用）/ `tools/maprender.py` 实景风（离线出图） |
+| 底图耗时 | 舆图渲染 **0.10~0.37 s** + PNG 编码 **0.07 s**；**首次取图 13.4 s → 0.74 s**（复用世界后）；换视野 0.16 s；同参命中缓存 0.026 s（`WORLD_CACHE_SIZE=4`）。**长尾来自建世界，不是渲染** |
+| 真浏览器冒烟 | `tools/e2e_web.py`（Selenium + 无头 Edge **152.0.4191.66，与分发的 WebView2 同版本**）→ **17 项全过 / 0 败**（2026-09-11 续复核）；补 jsdom 的两个原理性盲区：**底图是否真画出来**（canvas 读像素断言"非纯色 + 纸底 + 墨 + 水蓝"）、**CJK 是否真能显示**（量渲染宽度）。基线 **`tests/baselines/map_baseline.json`（入库，跟着代码走）**（sha256 `edf302f3101311db` + 像素统计 paper 0.8065 / ink 0.1156 / water 0.0766，**改地图就会变红**，`--update-baseline` 重记） |
 | 内容点发现 | **T4-A 已接玩法**：落地（`travel` 两处 / `march` / `explore`）即写 `WorldState.discovered`，叙事+`data.newly_discovered[]`；初始化（`discover_here`）站在出生城旁 → 最近的驿站 14 里内即被记入舆图 |
 | 情报买卖 | **T4-B 已接玩法**：`content/intel.py` 货单——粗舆图 300 / 详图 2000（改 `map_level`）、当地情报 600（600 里内的内容点一次入舆图）；坊市面板有「情报」货段；**同一处情报只能买一次**（不重复收费） |
 | 地图右键 | 右键任意位置 = 走过去（引擎 `travel` 支持 `x`/`y` 世界坐标，与地名共用寻路管线；**无舆图仍被拒 `need_map`**，脚下 60 里内走"近距挪动"） |
@@ -264,7 +268,7 @@ content/   实体数据（id 编码）：ids / effects 效果模板 / actions �
 server/    Web 壳：session 会话层(GameSession/RunManager) / savefile 存档 I/O / app FastAPI 路由（伺服 frontend/dist）/ main 启动
 frontend/  正式前端（Vue3+Vite+Pinia+TS）：src/api 客户端 / src/stores Pinia / src/views 各界面 / dist 构建产物（gitignore）
 tools/     开发期工具：dummy 木桩 / content_check 内容校验 / gen_skill 技能生成器 / replay 指纹重放
-tests/     smoke 自动 bot 回归 / test_time 统一时间刻度 / test_worldmap 世界地图内核 / test_travel 移动 / test_effects 效果 / test_hardening 引擎加固 / test_clock 时间轴 / test_action 动作 / test_battle_time 时间轴战斗 / test_gongfa_deep 功法深层 / test_server Web 壳 / test_content_tools 内容工具 / test_replay 指纹重放（共 12 个单测文件 + smoke）
+tests/     smoke 自动 bot 回归 / test_time 统一时间刻度 / test_worldmap 世界地图内核 / test_travel 移动 / test_fog 迷雾与情报 / test_map_render 地图朝向与投影 / test_effects 效果 / test_hardening 引擎加固 / test_clock 时间轴 / test_action 动作 / test_battle_time 时间轴战斗 / test_gongfa_deep 功法深层 / test_server Web 壳 / test_content_tools 内容工具 / test_replay 指纹重放（共 14 个单测文件 + smoke）
 docs/      见 docs/README.md 文档地图
 saves/     （运行时自动生成、已 gitignore；run_<seed>.json 档）
 .git/      本地仓库（根级；.venv/saves/logs/node_modules/dist 已忽略）
