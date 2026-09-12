@@ -514,6 +514,9 @@ class Game:
         self._route_memo = {}    # (起点,终点,档位,境界,舆图档) → 候选路径（纯缓存，不入存档）
         self._map_memo = {}      # (坐标,舆图档,境界,发现版本,半径) → map_view 结果（纯缓存）
         self._disc_ver = 0       # T4：`discovered` 每变更一次 +1（**不存档**，只作缓存失效用）
+        # 候选路径的"途经格"旁表：与 `_route_memo` 同键（见 `_plan_routes`）。
+        # 单独放是**故意的**——route dict 会原样下发给前端，途经格不下发。
+        self._route_cells = {}
         self._intel_bought = set()  # T4-B：已买过情报的位置 (round(x,3), round(y,3))（不存档）
         # 调试：新局自动发资源（只在 `--debug` 时挂上，见 engine/debug.py）
         if DBG.enabled():
@@ -760,7 +763,7 @@ class Game:
         """写回世界坐标（**不动 `Player.location`**，避免为此触发世界生成）。"""
         self.state.world = self.state.world.with_pos(float(x), float(y))
 
-    def _set_pos_arrived(self, x: float, y: float):
+    def _set_pos_arrived(self, x: float, y: float, path_cells=None):
         """移动**落地**时写坐标并更新派生标签（地名 + 旧地点 id）。
 
         为什么只在落地时算：算"这是哪座城镇"要遍历城镇列表（需世界）。
@@ -770,6 +773,11 @@ class Game:
 
         例外：**旧地点锚点不建世界就直接记名**（坊市/灵脉山/幽谷秘境/古战场遗迹/上古洞府），
         这样"旧地点之间互访"这条快捷路径不会被拖成一次 6 秒世界生成。
+
+        `path_cells`：本次移动**途经的格**（A* 的 `PathResult.cells`，可选）。
+        给了就把沿途格记进 `WorldState.explored`——**走过的地方才画实景**
+        （定案 §5 两层迷雾），而"走过"本来就包括途中，不只是落点。
+        ⚠️ 必须由调用方传：`_set_pos_arrived` 不该自己去算路径（那是第二次 A*）。
         """
         self._set_pos(x, y)
         cx, cy = WM.cell_of(x, y)
@@ -782,7 +790,39 @@ class Game:
         if name is None:
             name = self._place_name(x, y)
         self.state.world.places["place:%d" % (cy * WM._N + cx)] = name
+        if path_cells:
+            self._record_corridor(path_cells)
         self._sync_location()
+
+    def _record_corridor(self, cells) -> int:
+        """把"途经的格"及其周边记进 `explored`（返回新增格数）。
+
+        为什么要**周边**（`EXPLORE_RADIUS_CELLS`）：一格 50 里、而画面上一格只有
+        几个像素，只记一格在路上几乎看不见（实测走 3 段 = 4 个格 = 36 像素 = 0.01%，
+        用户原话"两张图除了位置不一样没有什么区别"）。给一点半径，
+        让"走过的一段路"在图上真的读得出来。
+        半径取 1（3×3 格 = 150 里见方）——人对走过的地方本来就有"这一片"的印象，
+        再大就不再是"亲自到过"而是"想当然"了。
+        """
+        if not cells:
+            return 0
+        exp = self.state.world.explored
+        n0 = len(exp)
+        r = int(S.EXPLORE_RADIUS_CELLS)
+        n = WM._N
+        for (ccx, ccy) in cells:
+            for dy in range(-r, r + 1):
+                yy = ccy + dy
+                if yy < 0 or yy >= n:
+                    continue
+                for dx in range(-r, r + 1):
+                    xx = ccx + dx
+                    if 0 <= xx < n:
+                        exp.add((xx, yy))
+        added = len(exp) - n0
+        if added:
+            self._disc_ver += 1
+        return added
 
     def place_name(self) -> str:
         """当前位置的显示名（城镇名 / 旧地点名 / 野外）——读缓存，**不建世界**。
@@ -935,6 +975,9 @@ class Game:
         带一层**实例内 memo**：同一 (起点, 终点, 档位, 境界, 舆图档) 只算一次。
         没有它时每次查询都是"建窗口代价场 + A*"（实测单次 0.1~1.2 s，首次还要叠
         世界生成 ≈6 s），而 bot / 前端会反复查同一对起终点。
+
+        途经格存在 `self._route_cells[mkey][idx]`（**不下发**，只给执行时记 explored 用），
+        memo 命中时一并复用——不重算 A*。
         """
         if d is None:
             d = self._dest_pos(dest)
@@ -950,8 +993,10 @@ class Game:
                 tuple(profiles), int(realm), self.state.world.map_level)
         hit = self._route_memo.get(mkey)
         if hit is not None:
+            # memo 命中：途经格也在旁表里（上次算的），不必重跑 A*
             return (name, gx, gy), hit
         out = []
+        cells_by_idx = {}
         tid_by_name = {t.name: i for i, t in R.TERRAINS.items()}
         for idx, prof in enumerate(profiles):
             res = self.wmap.find_path((x, y), (gx, gy), profile=prof, realm_idx=realm)
@@ -969,9 +1014,17 @@ class Game:
                 "road_share": round(road, 4), "danger_share": round(danger, 4),
                 "dest": {"name": name, "x": gx, "y": gy},
             })
+            # 途经格（执行时据此把"走过的路"记进 explored 画实景）。
+            # **另存一处**而不是塞进 route dict：route dict 会原样下发给前端
+            # （`r.data["routes"]`），塞进去等于每次响应多传几百个格坐标。
+            cells_by_idx[idx] = tuple(res.cells)
         if len(self._route_memo) >= 64:
             self._route_memo.clear()
         self._route_memo[mkey] = out
+        # 途经格按**候选序号**存一圈：执行时只要 `pick["idx"]` 就能取到，
+        # 不必在调用点重建 memo 键（那种写法一旦键的组成变了就会静默取不到 → 走廊丢失）。
+        self._route_cells.clear()
+        self._route_cells.update(cells_by_idx)
         return (name, gx, gy), out
 
     def _travel(self, dest_input: str, route=None, profile: str = None,
@@ -1056,6 +1109,8 @@ class Game:
             return _reject(r, R_NEED_MAP,
                            "你手中无舆图，不知路在何方。只能按方向摸索着走"
                            "（march <东/东北/…>）。")
+        # 每次规划都重算途经格（`_route_cells` 在 `_plan_routes` 里被覆盖成**本次**的候选），
+        # 执行分支随后按 `idx` 取，不会串到上一次的路径。
         dest, routes = self._plan_routes(dest_input, profile=profile,
                                          limit=self._route_limit(),
                                          d=None if not to_point else (name, gx, gy))
@@ -1084,7 +1139,9 @@ class Game:
                            f"候选序号 {idx} 无效（可选："
                            f"{'、'.join(str(q['idx']) for q in routes)}）。")
         self._advance_si(pick["si"])
-        self._set_pos_arrived(gx, gy)
+        # 把**整条路**记进 explored（走过的不只是落点）。途经格取自 `_route_cells`
+        # （按候选序号存）——`pick` 里没有这些格，它们不下发给前端。
+        self._set_pos_arrived(gx, gy, path_cells=self._route_cells.get(idx))
         if tgt_site is not None:
             p.location = tgt_site
         # 坐标目的地：`Player.location` 由 `_set_pos_arrived` 里的 `_sync_location()` 派生，
